@@ -1,0 +1,108 @@
+name: CI
+
+# 门禁的目的是守住「基本特性不能坏」——尤其是终端里能选中文字、能点链接。
+# 这两样在 2026-08 坏过不止一次，纯函数单测全绿也照样漏（错的是事件接线不是算法），
+# 所以前端 job 跑的是 jsdom + 真 xterm + 真 MouseEvent 的回归测试。
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  frontend:
+    name: 前端测试与构建
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/server/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: packages/server/frontend/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 单元与回归测试（含终端「能选中 / 能点链接」）
+        run: npm test
+
+      - name: 构建
+        run: npm run build
+
+  backend:
+    name: 后端测试
+    runs-on: ubuntu-latest
+
+    services:
+      # token-storage 的测试要连真库。本地没起 Postgres 时它会 ECONNREFUSED，
+      # 在 CI 里起一个真实例，避免用「跳过」把测试挡在门外（跳过 = 门禁形同虚设）。
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: vibeanything
+          POSTGRES_PASSWORD: ci-only-postgres
+          POSTGRES_DB: vibeanything
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_NAME: vibeanything
+      DB_USER: vibeanything
+      DB_PASSWORD: ci-only-postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装 tmux（pty-manager / active-sessions 是真 tmux 集成测试，不是 mock）
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      # 根目录的 tests/ 有两个测试跨到了别的 workspace，只装根依赖会在 import 阶段就崩：
+      #   - dnd-activation.test.js 直接 import 前端的 @dnd-kit/core（跑真 sensor，不是自己重写判定）
+      #   - usage-store.test.js → packages/server/auth.js → bcryptjs
+      # 这两处依赖各有自己的 package-lock，都只装 dependencies（需要的包都在 deps 里，
+      # 省掉 vite/vitest 等前端 devDeps）。
+      - name: 安装依赖（根 + server + frontend）
+        run: |
+          npm ci
+          npm ci --prefix packages/server --omit=dev
+          npm ci --prefix packages/server/frontend --omit=dev
+
+      - name: 测试
+        run: npm test
+
+  lint:
+    name: Lint（暂不阻断）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/server/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: packages/server/frontend/package-lock.json
+      - run: npm ci
+      # 存量文件里还有一批 no-unused-vars 等历史问题（本次未逐一清理，避免改动无关文件）。
+      # 先让结果可见但不挡合并；存量清零后把 continue-on-error 去掉，改成硬门禁。
+      - run: npm run lint
+        continue-on-error: true

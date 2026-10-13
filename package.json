@@ -1,0 +1,49 @@
+{
+  "name": "vibeanything",
+  "version": "4.3.0",
+  "description": "飞书双向交互 + 消息队列 + 多机多会话路由 for Claude Code",
+  "bin": {
+    "vibeanything": "bin/cli.js"
+  },
+  "keywords": [
+    "claude-code",
+    "feishu",
+    "hooks",
+    "notification",
+    "lark"
+  ],
+  "author": "Tigerdwgth <q2w3er5t6tty7@sina.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tigerdwgth/vibeanything.git"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "hooks/",
+    "lib/",
+    "packages/server/index.js",
+    "packages/server/auth.js",
+    "packages/server/relay.js",
+    "packages/server/machine-tokens.js",
+    "packages/server/profile-rules.js",
+    "packages/server/session-owners.js",
+    "packages/server/usage-store.js",
+    "packages/server/package.json",
+    "packages/server/frontend/dist/",
+    "packages/server/frontend/README.md",
+    "marketplace.json"
+  ],
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.59.0",
+    "node-pty": "^1.1.0",
+    "pg": "^8.20.0",
+    "socks-proxy-agent": "^8.0.5"
+  }
+}

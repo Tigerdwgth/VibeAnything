@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- .ico 放第一位：浏览器就算不看 link 也会自己去要 /favicon.ico，
+         那个路径原先被 SPA 兜底路由吞成 200 + HTML，页签图标因此一直是默认的。 -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="256x256" href="/usagi.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VibeAnything</title>
+    <style>
+      :root { --app-height: 100vh; }
+      @supports (height: 100dvh) {
+        :root { --app-height: 100dvh; }
+      }
+      *, *::before, *::after { box-sizing: border-box; }
+      /* html/body 与 app 用同一个 --app-height：100dvh 与布局视口(100%)不一致时，
+         页面会比可视区域矮，底部露白条。--app-height 由 main.jsx 用
+         visualViewport.height 动态校准（平板/手机浏览器工具栏会改变真实可视高度）。 */
+      html, body { overscroll-behavior: none; height: var(--app-height); width: 100%; margin: 0; overflow: hidden; }
+      #root { height: 100%; width: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "vibeanything-server",
+  "version": "1.0.0",
+  "description": "Central web server for vibeanything dashboard",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "sql.js": "^1.12.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {}
+}

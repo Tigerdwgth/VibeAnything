@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- .ico 放第一位：浏览器就算不看 link 也会自己去要 /favicon.ico，
+         那个路径原先被 SPA 兜底路由吞成 200 + HTML，页签图标因此一直是默认的。 -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="256x256" href="/usagi.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/mobile.webmanifest" />
+    <!-- viewport-fit=cover：让页面铺到屏幕物理边缘，刘海/底部横条区域改由 env(safe-area-inset-*)
+         自己让位。不加它 iOS 会把整页缩进安全区内，两侧留黑边。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- 「添加到主屏幕」后以独立窗口启动（无地址栏），状态栏透明由页面自己铺底色 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="VibeAnything" />
+    <meta name="theme-color" content="#0a0a0f" />
+    <!-- iOS Safari 会把像电话号码的数字自动变成链接，终端输出里全是数字，必须关掉 -->
+    <meta name="format-detection" content="telephone=no" />
+    <title>VibeAnything</title>
+    <!-- 不外链 Google Fonts：dashboard 部署在国内跳板机、走 HTTP，fonts.googleapis.com
+         不可达，而字体样式表是渲染阻塞的——首屏会白屏等到超时。桌面版从来就没引过，
+         theme.js 里的 system-ui / monospace 回退足够用，两端保持一致。 -->
+    <style>
+      :root {
+        --app-height: 100vh;
+        /* 安全区：常量在非 iOS 浏览器上取不到时回落 0（env 的第二参数就是干这个的） */
+        --safe-top: env(safe-area-inset-top, 0px);
+        --safe-bottom: env(safe-area-inset-bottom, 0px);
+        --safe-left: env(safe-area-inset-left, 0px);
+        --safe-right: env(safe-area-inset-right, 0px);
+      }
+      @supports (height: 100dvh) {
+        :root { --app-height: 100dvh; }
+      }
+      *, *::before, *::after { box-sizing: border-box; }
+      /* --app-height 由 src/app-height.js 用 visualViewport.height 实时校准：
+         地址栏收放、软键盘弹出都会改真实可视高度，100vh/100dvh 都量不准。 */
+      html, body {
+        overscroll-behavior: none;      /* 关掉下拉刷新与滚动链，终端里滑动不会连带整页动 */
+        height: var(--app-height);
+        width: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #0a0a0f;
+        -webkit-text-size-adjust: 100%; /* 横屏时 Safari 会自作主张放大字号 */
+      }
+      #root { height: 100%; width: 100%; }
+      /* 手指点按不要有 300ms 双击缩放延迟，也不要蓝色高亮块 */
+      button, [role="button"] { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+      /* 断线时的状态点在闪 */
+      @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.4 } }
+      ::-webkit-scrollbar { width: 3px; height: 3px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/mobile/main.jsx"></script>
+  </body>
+</html>
