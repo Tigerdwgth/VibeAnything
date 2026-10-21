@@ -6,8 +6,6 @@ const os = require('node:os');
 const { saveConfig, defaultConfig, getBaseDir, getHooksDir } = require('../lib/config');
 // 「哪几条 hook 是我们装的」判据单独成模块（lib/claude-hooks.js），带单测
 const { hasHookScript, removeOurHooks } = require('../lib/claude-hooks');
-const { buildCardPayload, sendWebhook } = require('../lib/feishu-webhook');
-const { buildAppCardContent, sendAppMessage } = require('../lib/feishu-app');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q) => new Promise((r) => rl.question(q, r));
@@ -87,41 +85,15 @@ function removeCrontab() {
 
 async function main() {
   console.log('\n🔔 vibeanything 安装向导\n');
-  console.log('本工具为 Claude Code 配置飞书通知 hooks。\n');
+  console.log('本工具为 Claude Code 配置 hooks，并接入 Web Dashboard。\n');
 
   const config = defaultConfig();
 
-  // 1. 选择通知方式
-  console.log('请选择飞书通知方式:');
-  console.log('  1) 群机器人 Webhook');
-  console.log('  2) 自建应用个人消息');
-  console.log('  3) 两者都要');
-  const choice = await ask('请输入 (1/2/3) [1]: ');
-  const mode = choice.trim() || '1';
-
-  // Webhook 配置
-  if (mode === '1' || mode === '3') {
-    config.webhook.enabled = true;
-    config.webhook.url = (await ask('飞书 Webhook URL: ')).trim();
-    const secret = (await ask('签名密钥 (可选，直接回车跳过): ')).trim();
-    if (secret) config.webhook.secret = secret;
-  }
-
-  // App 配置
-  if (mode === '2' || mode === '3') {
-    config.app.enabled = true;
-    config.app.appId = (await ask('App ID: ')).trim();
-    config.app.appSecret = (await ask('App Secret: ')).trim();
-    config.app.receiverId = (await ask('接收人 ID (open_id/user_id): ')).trim();
-    const idType = (await ask('ID 类型 (open_id/user_id) [open_id]: ')).trim();
-    if (idType) config.app.receiverType = idType;
-  }
-
-  // 2. 选择 hooks
+  // 1. 选择 hooks
   console.log('\n请选择要启用的 hooks (回车默认全部启用):');
-  const h1 = await ask('  飞书通知 (Stop/Notification/Failure) [Y/n]: ');
+  const h1 = await ask('  会话事件上报 (Stop/Notification → Dashboard 小人状态与提示音) [Y/n]: ');
   config.hooks.notify = h1.trim().toLowerCase() !== 'n';
-  const h2 = await ask('  危险命令拦截 + 飞书告警 [Y/n]: ');
+  const h2 = await ask('  危险命令拦截 [Y/n]: ');
   config.hooks.guard = h2.trim().toLowerCase() !== 'n';
   const h3 = await ask('  Python 代码格式化 [Y/n]: ');
   config.hooks.formatPython = h3.trim().toLowerCase() !== 'n';
@@ -136,7 +108,7 @@ async function main() {
     if (fmt.trim()) config.pythonFormatter = fmt.trim();
   }
 
-  // 3. Web Dashboard 配置
+  // 2. Web Dashboard 配置
   console.log('\n--- Web Dashboard 配置 ---');
   const enableDash = await ask('是否启用 Web Dashboard？(y/N): ');
   if (enableDash.trim().toLowerCase() === 'y') {
@@ -155,11 +127,11 @@ async function main() {
     config.centralServer = { enabled: false, url: '', machineToken: '', machineId: '' };
   }
 
-  // 4. 保存配置
+  // 3. 保存配置
   saveConfig(config);
   console.log(`\n✅ 配置已保存到 ${path.join(getBaseDir(), 'config.json')}`);
 
-  // 5. 复制 hooks 脚本到 ~/.vibeanything/
+  // 4. 复制 hooks 脚本到 ~/.vibeanything/
   const hooksDir = getHooksDir();
   const libDir = path.join(getBaseDir(), 'lib');
   fs.mkdirSync(hooksDir, { recursive: true });
@@ -176,34 +148,14 @@ async function main() {
     }
   }
   // 复制 lib
-  for (const f of ['config.js', 'feishu-webhook.js', 'feishu-app.js', 'sender.js', 'ipc.js', 'daemon.js', 'session-registry.js']) {
+  for (const f of ['config.js', 'paths.js', 'ipc.js', 'daemon.js', 'session-registry.js']) {
     const src = path.join(srcRoot, 'lib', f);
     const dst = path.join(libDir, f);
     if (fs.existsSync(src)) fs.copyFileSync(src, dst);
   }
   console.log(`✅ Hook 脚本已安装到 ${hooksDir}`);
 
-  // 6. 测试发送
-  const doTest = await ask('\n是否发送测试消息? [Y/n]: ');
-  if (doTest.trim().toLowerCase() !== 'n') {
-    console.log('发送测试消息...');
-    try {
-      if (config.webhook.enabled && config.webhook.url) {
-        const payload = buildCardPayload({ type: 'task_complete', cwd: process.cwd(), detail: '这是一条测试消息' });
-        const res = await sendWebhook(config.webhook.url, payload, config.webhook.secret);
-        console.log('  Webhook:', res.code === 0 ? '✅ 成功' : `❌ 失败 (${JSON.stringify(res)})`);
-      }
-      if (config.app.enabled && config.app.appId) {
-        const content = buildAppCardContent({ type: 'task_complete', cwd: process.cwd(), detail: '这是一条测试消息' });
-        const res = await sendAppMessage(config.app.appId, config.app.appSecret, config.app.receiverId, config.app.receiverType, content);
-        console.log('  App:', res.code === 0 ? '✅ 成功' : `❌ 失败 (${JSON.stringify(res)})`);
-      }
-    } catch (e) {
-      console.log('  ❌ 发送失败:', e.message);
-    }
-  }
-
-  // 7. 注入 hooks 到 ~/.claude/settings.json
+  // 5. 注入 hooks 到 ~/.claude/settings.json
   const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
   let claudeSettings = {};
   if (fs.existsSync(claudeSettingsPath)) {
@@ -299,10 +251,9 @@ async function main() {
   fs.writeFileSync(claudeSettingsPath, JSON.stringify(claudeSettings, null, 2), 'utf-8');
   console.log(`✅ Hooks 已注入 ${claudeSettingsPath}`);
 
-  console.log('\n🎉 安装完成! Claude Code 现在会通过飞书通知你。\n');
+  console.log('\n🎉 安装完成! Claude Code hooks 已就绪。\n');
   console.log('管理命令:');
   console.log('  npx vibeanything                # 重新配置');
-  console.log('  npx vibeanything --test         # 发送测试消息');
   console.log('  npx vibeanything --remove       # 卸载');
   console.log('  npx vibeanything --daemon start # 启动守护进程 (ws-client + hook 事件转发)');
   console.log('  npx vibeanything --daemon stop  # 停止守护进程');
@@ -313,7 +264,7 @@ async function main() {
   console.log('  sudo npx vibeanything --deploy dashboard # 部署为 Dashboard 服务器（systemd 自启动）');
   console.log('  sudo npx vibeanything --deploy client    # 部署为客户端（systemd 自启动）\\n');
 
-  // 8. crontab 自启动（可选）
+  // 6. crontab 自启动（可选）
   const enableCron = await ask('是否配置 crontab 开机自启 + 5分钟看门狗？(y/N): ');
   if (enableCron.trim().toLowerCase() === 'y') {
     installCrontab();
@@ -436,25 +387,6 @@ if (args[0] === 'join') {
   }
   rl.close();
 
-} else if (args.includes('--test')) {
-  const { loadConfig } = require('../lib/config');
-  const cfg = loadConfig();
-  (async () => {
-    console.log('发送测试消息...');
-    if (cfg.webhook.enabled) {
-      const payload = buildCardPayload({ type: 'task_complete', cwd: process.cwd(), detail: '测试消息' });
-      const res = await sendWebhook(cfg.webhook.url, payload, cfg.webhook.secret);
-      console.log('Webhook:', res.code === 0 ? '✅' : `❌ ${JSON.stringify(res)}`);
-    }
-    if (cfg.app.enabled) {
-      const content = buildAppCardContent({ type: 'task_complete', cwd: process.cwd(), detail: '测试消息' });
-      const res = await sendAppMessage(cfg.app.appId, cfg.app.appSecret, cfg.app.receiverId, cfg.app.receiverType, content);
-      console.log('App:', res.code === 0 ? '✅' : `❌ ${JSON.stringify(res)}`);
-    }
-    if (!cfg.webhook.enabled && !cfg.app.enabled) {
-      console.log('未配置任何通知渠道。请先运行 npx vibeanything 进行配置。');
-    }
-  })();
 } else if (args.includes('--daemon')) {
   const { loadConfig } = require('../lib/config');
   const cfg = loadConfig();

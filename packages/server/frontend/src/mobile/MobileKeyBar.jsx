@@ -53,13 +53,14 @@ const Divider = () => (
  * @param {() => void} props.onPickImage   打开相册选图
  * @param {() => void} props.onScrollToBottom 回到最新输出（退出 tmux copy-mode）
  * @param {() => void} props.onCopyAll     复制选中内容，无选中则复制整个终端缓冲
+ * @param {() => void} props.onCopyCommand 把选中行所在的命令拼成一行再复制（去缩进、拼回折断的行）
  * @param {() => void} props.onPaste       把剪贴板内容敲进终端（读不到剪贴板时弹手动粘贴面板）
  * @param {(cmd: string) => void} props.onSlashCommand 发一条斜杠命令（/clear、/compact）
  * @param {boolean} props.directKeyboard   当前是否处于「按键直达终端」模式
  * @param {() => void} props.onToggleDirectKeyboard
  */
 export default function MobileKeyBar({
-  onSendText, onSendLine, onPickImage, onCopyAll, onPaste, onSlashCommand, onScrollToBottom,
+  onSendText, onSendLine, onPickImage, onCopyAll, onCopyCommand, onPaste, onSlashCommand, onScrollToBottom,
   directKeyboard, onToggleDirectKeyboard,
 }) {
   const send = (seq) => () => onSendText(seq);
@@ -106,6 +107,7 @@ export default function MobileKeyBar({
       <Divider />
       <KeyButton label="＋图片" title="从相册选图上传到这台开发机，并把路径敲进终端" onClick={onPickImage} tone={TONE_TEXT} />
       <KeyButton label="复制" title="复制选中内容；没有选中则复制整个终端缓冲（长按终端某行可选中该行）" onClick={onCopyAll} tone={TONE_TEXT} />
+      <KeyButton label="复制命令" title="先长按终端里命令的任意一行选中，再点这里：把整条命令拼成一行复制（去缩进、拼回被折断的行）" onClick={onCopyCommand} tone={TONE_TEXT} />
       <KeyButton label="粘贴" title="把剪贴板内容敲进终端（HTTP 页面读不到剪贴板时会弹出手动粘贴框）" onClick={onPaste} tone={TONE_TEXT} />
       <KeyButton
         label="⌨直连"

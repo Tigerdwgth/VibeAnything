@@ -20,6 +20,7 @@ function render(overrides = {}) {
     onSendLine: () => calls.push(['line']),
     onPickImage: () => calls.push(['image']),
     onCopyAll: () => calls.push(['copy']),
+    onCopyCommand: () => calls.push(['copyCommand']),
     onScrollToBottom: () => calls.push(['bottom']),
     onPaste: () => calls.push(['paste']),
     onSlashCommand: (cmd) => calls.push(['slash', cmd]),
@@ -105,6 +106,12 @@ describe('非字节类的动作', () => {
     expect(calls).toEqual([['copy']]);
   });
 
+  test('复制命令 调的是复制命令入口，不是普通复制', () => {
+    render();
+    click('复制命令');
+    expect(calls).toEqual([['copyCommand']]);
+  });
+
   test('⌨直连 切换按键直达模式，并反映当前状态', () => {
     render({ directKeyboard: false });
     expect(button('⌨直连').title).toMatch(/输入框模式/);
@@ -177,7 +184,7 @@ describe('与桌面版对齐的那几个键', () => {
     render();
     const labels = Array.from(host.querySelectorAll('button')).map(b => b.textContent);
     // 桌面版 TerminalPanel 快捷键栏上的那一排（「⤓ 最新」在手机上省成「⤓」）
-    for (const expected of ['↑', '↓', '←', '→', '⤓', '⏎', '继续', '^C', '⇥', 'Esc', '/clear', '/compact', '复制', '粘贴']) {
+    for (const expected of ['↑', '↓', '←', '→', '⤓', '⏎', '继续', '^C', '⇥', 'Esc', '/clear', '/compact', '复制', '复制命令', '粘贴']) {
       expect(labels).toContain(expected);
     }
   });

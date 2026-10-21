@@ -102,11 +102,11 @@ test('patchConfigFile 只写用户真正设过的键，不把整份默认值抄�
 });
 
 test('patchConfigFile 保留文件里已有的其它键（装机不该把别人的配置冲掉）', () => {
-  writeConfig({ machineId: 'old', pythonFormatter: 'pycodestyle', app: { enabled: true, appId: 'cli_x' } });
+  writeConfig({ machineId: 'old', pythonFormatter: 'pycodestyle', defaultWorkDir: '/srv/work' });
   config.patchConfigFile({ centralServer: { enabled: true, url: 'ws://d/ws', machineToken: 't' } });
   const raw = config.readRawConfig();
   assert.strictEqual(raw.pythonFormatter, 'pycodestyle');
-  assert.strictEqual(raw.app.appId, 'cli_x');
+  assert.strictEqual(raw.defaultWorkDir, '/srv/work');
   assert.strictEqual(raw.centralServer.machineToken, 't');
   assert.strictEqual(raw.machineId, 'old', '没 patch 的字段保持原样');
 });

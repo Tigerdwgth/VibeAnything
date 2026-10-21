@@ -11,6 +11,7 @@ import {
   encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit,
 } from './terminal-io';
 import { copyTextToClipboard as copyToClipboard } from './clipboard';
+import { selectionAsCommand } from './terminal-command-copy';
 import { SLASH_COMMANDS, sendSlashCommand } from './slash-commands';
 import TerminalComposer from './TerminalComposer';
 import {
@@ -127,6 +128,15 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     setUploadNotice({ text, error: isError });
     noticeTimerRef.current = setTimeout(() => setUploadNotice(null), isError ? 4000 : 2000);
+  };
+
+  // 「复制命令」按钮：选区 → 拼成一行的命令 → 剪贴板。没选中给出提示，别静默。
+  const copyAsCommand = () => {
+    const term = termRef.current;
+    const command = term ? selectionAsCommand(term) : '';
+    if (!command) { notifyUpload('先用鼠标选中命令，再点「复制命令」', true); return; }
+    copyTextToClipboard(command);
+    term.clearSelection();
   };
 
   // 粘贴/拖入的文件 → 开发机落盘 → 回执里的路径由 onMessage 敲进终端。
@@ -694,6 +704,14 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
             term.clearSelection();
           }}
         >复制</button>
+        {/* 复制为命令：选中后点它，折成多行的命令（Claude Code 按宽度硬折行并缩进 2 格、
+            tmux 滚历史时丢软换行标记）拼回一行可直接粘贴执行。普通复制不动，见 terminal-command-copy.js */}
+        <button
+          style={{ ...mBtnStyle, fontSize: '0.75rem', minWidth: '40px' }}
+          onPointerDown={e => e.preventDefault()}
+          onClick={copyAsCommand}
+          title="把选中的命令拼成一行再复制（去缩进、拼回被折断的行）；先用鼠标选中命令"
+        >复制命令</button>
         <button
           style={{ ...mBtnStyle, fontSize: '0.75rem', minWidth: '40px' }}
           onPointerDown={e => e.preventDefault()}

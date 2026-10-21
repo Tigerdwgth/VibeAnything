@@ -219,6 +219,16 @@ describe('粘贴按钮在读不到剪贴板时要有出口', () => {
   });
 });
 
+describe('复制命令按钮', () => {
+  const byText = (t) => Array.from(host.querySelectorAll('button')).find(b => b.textContent === t);
+
+  test('没有选中时给出提示，而不是静默（「点了没反应」是这个项目栽过两次的那一类）', () => {
+    mount();
+    act(() => { byText('复制命令').dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+    expect(host.textContent).toContain('先用鼠标选中命令');
+  });
+});
+
 describe('斜杠命令', () => {
   const byText = (t) => Array.from(host.querySelectorAll('button')).find(b => b.textContent === t);
 

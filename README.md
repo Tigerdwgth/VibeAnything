@@ -1,6 +1,6 @@
 # vibeanything
 
-Claude Code 飞书通知 hooks + Web Dashboard —— 任务通知、危险命令拦截，以及通过浏览器管理多台开发机的 Claude Code 会话（完整 PTY 终端、文件夹分组、红绿灯状态）。
+Claude Code hooks + Web Dashboard —— 会话事件上报、危险命令拦截，以及通过浏览器管理多台开发机的 Claude Code 会话（完整 PTY 终端、文件夹分组、红绿灯状态）。
 
 ## 安装
 
@@ -21,15 +21,13 @@ cd vibeanything && node bin/cli.js
 
 ## 功能
 
-| Hook | 触发事件 | 说明 | 飞书通知 |
-|------|---------|------|---------|
-| 任务完成 | Stop | Claude 完成响应时通知 | ✅ |
-| 权限请求 | Notification | 需要用户确认时通知 | ✅ |
-| 工具失败 | PostToolUseFailure | 工具执行失败时通知 | ✅ |
-| 危险拦截 | PreToolUse (Bash) | 拦截 rm -rf 等危险命令（直接拦截 + 告警通知） | ✅ |
-| 会话状态 | UserPromptSubmit / Stop | 上报会话「运行中/空闲」给 Dashboard 红绿灯 | ❌ |
-| Python 格式化 | PostToolUse (Edit/Write) | 自动格式化 .py 文件 | ❌ |
-| Commit 审查 | PreToolUse (Bash) | git commit 前检查代码风格 | ❌ |
+| Hook | 触发事件 | 说明 |
+|------|---------|------|
+| 会话事件上报 | Stop / Notification | 任务完成、需要确认时上报给 Dashboard（小人状态 + 提示音） |
+| 危险拦截 | PreToolUse (Bash) | 直接拦截 rm -rf 等危险命令，并把原因反馈给 Claude |
+| 会话状态 | UserPromptSubmit / Stop | 上报会话「运行中/空闲」给 Dashboard 红绿灯 |
+| Python 格式化 | PostToolUse (Edit/Write) | 自动格式化 .py 文件 |
+| Commit 审查 | PreToolUse (Bash) | git commit 前检查代码风格 |
 
 ### Dashboard 会话管理
 
@@ -41,38 +39,10 @@ cd vibeanything && node bin/cli.js
   然后自动把绝对路径敲进终端（含空格的路径会加引号），Claude 随即就能读到这张图/这个文件。
   纯文本粘贴不受影响，仍走 xterm 原生行为。单文件默认上限 20MB。
 
-## 通知详情
-
-每条通知包含完整上下文信息：
-
-| 事件 | 包含字段 |
-|------|---------|
-| 任务完成 | 项目目录、时间、会话ID、Claude回复（完整）、Transcript路径 |
-| 权限请求 | 项目目录、时间、会话ID、通知标题、通知内容、通知类型 |
-| 工具失败 | 项目目录、时间、会话ID、工具名、输入参数、错误信息 |
-| 危险拦截 | 项目目录、时间、完整命令、匹配规则、会话ID |
-
-## 飞书通知方式
-
-- **群机器人 Webhook**: 在飞书群添加自定义机器人，获取 Webhook URL
-- **自建应用**: 创建飞书应用，通过 API 发送个人消息
-
-两种方式可同时启用。
-
-## 通知卡片示例
-
-| 事件 | 卡片标题 | 颜色 |
-|------|---------|------|
-| 任务完成 | ✅ Claude Code 任务完成 | 🟢 绿色 |
-| 权限请求 | ⚠️ Claude Code 需要确认 | 🟡 黄色 |
-| 工具失败 | ❌ Claude Code 工具执行失败 | 🟠 橙色 |
-| 危险拦截 | 🚨 危险命令已拦截 | 🔴 红色 |
-
 ## 命令
 
 ```bash
 npx vibeanything                # 安装/重新配置
-npx vibeanything --test         # 发送测试消息
 npx vibeanything --remove       # 卸载
 npx vibeanything --daemon start # 启动交互守护进程
 npx vibeanything --daemon stop  # 停止守护进程
@@ -179,7 +149,7 @@ sudo journalctl -u claude-dashboard -f
 ```bash
 # 1. 配置客户端
 node bin/cli.js
-# 在配置向导中配置飞书应用和中央服务器地址
+# 在配置向导中配置中央服务器地址
 
 # 2. 部署为 systemd 服务
 sudo node bin/cli.js --deploy client
@@ -190,7 +160,7 @@ sudo journalctl -u claude-hooks-daemon -f
 ```
 
 部署特性：
-- daemon 自动启动（飞书交互 + WebSocket 连接）
+- daemon 自动启动（WebSocket 连接 + hook 事件转发）
 - systemd 服务自动重启
 - 开机自启动
 - 日志输出到 journalctl
@@ -297,8 +267,8 @@ nvm install 25 && nvm use 25
 **2. 克隆项目并安装依赖**
 
 ```bash
-git clone https://github.com/Tigerdwgth/vibeanything.git /opt/claude-hooks-feishu
-cd /opt/claude-hooks-feishu
+git clone https://github.com/Tigerdwgth/vibeanything.git /opt/vibeanything
+cd /opt/vibeanything
 npm install
 
 # 构建前端
@@ -317,7 +287,7 @@ node -e "const {randomUUID}=require('crypto'); console.log(randomUUID())"
 **4. 创建管理员账号**
 
 ```bash
-cd /opt/claude-hooks-feishu
+cd /opt/vibeanything
 node packages/server/index.js --create-user admin
 ```
 
@@ -348,7 +318,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/claude-hooks-feishu
+WorkingDirectory=/opt/vibeanything
 Environment=PORT=3000
 Environment=JWT_SECRET=<生成随机字符串>
 ExecStart=/root/.nvm/versions/node/v25.8.0/bin/node packages/server/index.js
@@ -567,7 +537,7 @@ daemon 打挂过一次。
 没有 GitHub 凭据，只能走 `git bundle` 手搬。真正的拦路虎是 `node-pty` 是原生模块：
 新机器 `npm install` 要么有匹配 Node ABI 的 prebuild、要么得现场编译。先把目标机器集合
 （macOS arm64 / Linux x64 × 几个 Node 大版本）的 prebuild 覆盖情况摸清，再决定是发 npm
-还是发 GitHub Release tarball。客户端其实用不到 `pg` 和飞书 SDK，可以降成可选依赖。
+还是发 GitHub Release tarball。客户端其实用不到 `pg`，可以降成可选依赖。
 
 ### 待实现：前端产物由 CI 发布
 

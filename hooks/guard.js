@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 const { loadConfig } = require('../lib/config');
-const { send } = require('../lib/sender');
 
 const os = require('node:os');
 
@@ -71,13 +70,7 @@ async function main() {
 
   if (!matched) process.exit(0);
 
-  // 检测到危险命令：发单向通知告警，然后直接拦截（exit 2）
-  const fields = [
-    { label: '命令', value: command },
-    { label: '匹配规则', value: matched }
-  ];
-  if (data.session_id) fields.push({ label: '会话ID', value: data.session_id });
-  await send({ type: 'danger_blocked', cwd: data.cwd || process.cwd(), fields });
+  // 检测到危险命令：直接拦截（exit 2），stderr 原因会反馈给 Claude
   process.stderr.write(`已拦截危险命令: "${command}" (匹配规则: ${matched})`);
   process.exit(2);
 }

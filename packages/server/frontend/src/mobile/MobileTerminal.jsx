@@ -10,6 +10,7 @@ import { takeWheelSteps, buildWheelSequence, fingerDeltaToAccum } from '../termi
 import { buildClickSequence, clientXYToCell } from '../terminal-mouse-click';
 import { attachImeCursorSync } from '../terminal-ime';
 import { copyTextToClipboard } from '../clipboard';
+import { selectionAsCommand } from '../terminal-command-copy';
 import { sendSlashCommand } from '../slash-commands';
 import {
   attachUploadHandlers, fileToBase64, inferFileName, quotePath, DEFAULT_MAX_UPLOAD_MB,
@@ -672,6 +673,15 @@ export default function MobileTerminal({ machineId, sessionId, ws, command, cwd,
           const all = term.getSelection();
           term.clearSelection();
           if (all) copy(all.replace(/\s+$/, ''), '已复制终端内容');
+        }}
+        onCopyCommand={() => {
+          const term = termRef.current;
+          if (!term) return;
+          // 长按只能选一行，selectionAsCommand 会把这一行所在的整条命令找全再拼成一行
+          const command = selectionAsCommand(term);
+          if (!command) { notify('先长按命令的任意一行选中它，再点「复制命令」', true); return; }
+          copy(command, '已复制命令');
+          term.clearSelection();
         }}
         directKeyboard={directKeyboard}
         onToggleDirectKeyboard={() => setDirectKeyboard(v => !v)}

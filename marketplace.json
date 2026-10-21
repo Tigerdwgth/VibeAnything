@@ -1,9 +1,9 @@
 {
   "name": "vibeanything",
-  "description": "飞书通知 hooks for Claude Code - 任务完成通知、危险命令拦截告警、Python格式化、Commit审查",
+  "description": "Claude Code hooks - 会话事件上报、危险命令拦截、Python格式化、Commit审查，配套多机 Web Dashboard",
   "version": "1.0.0",
   "author": "Tigerdwgth",
   "homepage": "https://github.com/Tigerdwgth/vibeanything",
-  "tags": ["feishu", "lark", "notification", "hooks", "guard"],
+  "tags": ["hooks", "guard", "dashboard"],
   "install": "npx vibeanything"
 }

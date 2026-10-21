@@ -18,7 +18,11 @@ if [ ! -f "$FILE_PATH" ]; then
 fi
 
 # 读取配置中的 formatter，默认 black
-CONFIG_FILE="$HOME/.claude-hooks-feishu/config.json"
+# 优先 ${VIBEANYTHING_HOME:-~/.vibeanything}，其次兼容旧安装目录 ~/.claude-hooks-feishu
+CONFIG_FILE="${VIBEANYTHING_HOME:-$HOME/.vibeanything}/config.json"
+if [ ! -f "$CONFIG_FILE" ]; then
+  CONFIG_FILE="$HOME/.claude-hooks-feishu/config.json"
+fi
 FORMATTER="black"
 if [ -f "$CONFIG_FILE" ]; then
   F=$(node -e "try{const c=require('$CONFIG_FILE');console.log(c.pythonFormatter||'black')}catch{console.log('black')}")

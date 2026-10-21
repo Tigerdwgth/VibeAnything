@@ -306,6 +306,72 @@ describe('复制', () => {
   });
 });
 
+// ── 复制命令（2026-10-20）──────────────────────────────────────
+//
+// Claude Code 把长命令按宽度硬折行并缩进 2 格，普通复制（长按一行 / 复制按钮）得到的是
+// 带缩进的多行，粘到 shell 里在 `>>` 处断开、语法错误。手机上长按只能选一行，
+// 所以「复制命令」要从被选中的那一行把整条命令找全再拼成一行。
+describe('复制命令', () => {
+  const tick = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 10)));
+  const LINE1 = "  mkdir -p ~/.ssh && echo 'ssh-ed25519 AAAAC3Nza gsj@macbook-pro' >>";
+  const LINE2 = '  ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys';
+  const COMMAND = "mkdir -p ~/.ssh && echo 'ssh-ed25519 AAAAC3Nza gsj@macbook-pro' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys";
+
+  async function feed(text, waitFor) {
+    act(() => {
+      ws.dispatchEvent(new window.MessageEvent('message', {
+        data: JSON.stringify({ type: 'pty_data', sessionId: 's-1', data: b64(text) }),
+      }));
+    });
+    const deadline = Date.now() + 800;
+    while (Date.now() < deadline && !host.textContent.includes(waitFor)) await tick();
+  }
+
+  /** 真手势：touchstart → 等过长按阈值 → touchend。第 row 行在 jsdom 里行高取默认 18、上边距 4。 */
+  async function longPressRow(row) {
+    const el = host.querySelector('.xterm').parentElement;
+    const y = 4 + row * 18 + 9;
+    const touch = { clientX: 20, clientY: y };
+    const fire = (type, extra) => {
+      const ev = new window.Event(type, { bubbles: true, cancelable: true });
+      Object.assign(ev, extra);
+      act(() => { el.dispatchEvent(ev); });
+    };
+    fire('touchstart', { touches: [touch], changedTouches: [touch] });
+    await act(async () => { await new Promise(r => setTimeout(r, 650)); });
+    fire('touchend', { touches: [], changedTouches: [touch] });
+  }
+
+  /** execCommand 被调用那一刻，回退 textarea 里装的就是要复制的文本。 */
+  let copied;
+  beforeEach(() => {
+    copied = [];
+    document.execCommand = () => {
+      copied.push(Array.from(document.querySelectorAll('textarea')).at(-1).value);
+      return true;
+    };
+  });
+  afterEach(() => { delete document.execCommand; });
+
+  test('长按其中一行再点「复制命令」：粘出来是一行可执行命令（对照：长按本身只复制那一行）', async () => {
+    mount();
+    await feed(`${LINE1}\r\n${LINE2}\r\n`, 'authorized_keys');
+    await longPressRow(1);
+    expect(copied.at(-1)).toBe(LINE2);   // 长按松手复制的只是被选中的那一行，带缩进（bug 现场）
+    click('复制命令');
+    expect(copied.at(-1)).toBe(COMMAND);
+    expect(host.textContent).toContain('已复制命令');
+  });
+
+  test('没有选中就点「复制命令」：给提示，不复制任何东西', async () => {
+    mount();
+    await feed(`${LINE1}\r\n${LINE2}\r\n`, 'authorized_keys');
+    click('复制命令');
+    expect(copied).toEqual([]);
+    expect(host.textContent).toContain('先长按命令的任意一行');
+  });
+});
+
 // ── 粘贴图片只能算一次（2026-09-22 线上 bug：粘一张图传两份、敲进两条路径）──
 //
 // 根因在 filesFromDataTransfer：items 和 files 两个来源都取，而 item.getAsFile()

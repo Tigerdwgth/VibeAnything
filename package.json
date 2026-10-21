@@ -1,16 +1,15 @@
 {
   "name": "vibeanything",
   "version": "4.3.0",
-  "description": "飞书双向交互 + 消息队列 + 多机多会话路由 for Claude Code",
+  "description": "Claude Code hooks + 多机多会话 Web Dashboard（浏览器 PTY 终端、会话路由）",
   "bin": {
     "vibeanything": "bin/cli.js"
   },
   "keywords": [
     "claude-code",
-    "feishu",
     "hooks",
-    "notification",
-    "lark"
+    "dashboard",
+    "tmux"
   ],
   "author": "Tigerdwgth <q2w3er5t6tty7@sina.com>",
   "license": "MIT",
@@ -41,9 +40,9 @@
     "marketplace.json"
   ],
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.59.0",
     "node-pty": "^1.1.0",
     "pg": "^8.20.0",
-    "socks-proxy-agent": "^8.0.5"
+    "socks-proxy-agent": "^8.0.5",
+    "ws": "^8.22.0"
   }
 }

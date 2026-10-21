@@ -23,19 +23,31 @@ test('getHooksDir returns correct path', () => {
 
 test('loadConfig returns default when no config exists', () => {
   const config = loadConfig();
-  assert.strictEqual(config.webhook.enabled, false);
-  assert.strictEqual(config.app.enabled, false);
+  assert.strictEqual(config.webhook, undefined);
+  assert.strictEqual(config.app, undefined);
   assert.ok(Array.isArray(config.dangerousPatterns));
 });
 
 test('saveConfig and loadConfig roundtrip', () => {
   const config = loadConfig();
-  config.webhook.enabled = true;
-  config.webhook.url = 'https://example.com/hook';
+  config.defaultWorkDir = '/srv/work';
+  config.pythonFormatter = 'autopep8';
   saveConfig(config);
   const loaded = loadConfig();
-  assert.strictEqual(loaded.webhook.enabled, true);
-  assert.strictEqual(loaded.webhook.url, 'https://example.com/hook');
+  assert.strictEqual(loaded.defaultWorkDir, '/srv/work');
+  assert.strictEqual(loaded.pythonFormatter, 'autopep8');
+});
+
+test('旧 config.json 里残留的 webhook/app 通知键被安静忽略', () => {
+  fs.writeFileSync(getConfigPath(), JSON.stringify({
+    machineId: 'legacy-box',
+    webhook: { enabled: true, url: 'https://example.com/hook', secret: 's' },
+    app: { enabled: true, appId: 'cli_x', appSecret: 'y', receiverId: 'ou_z', receiverType: 'open_id' }
+  }));
+  const loaded = loadConfig();
+  assert.strictEqual(loaded.machineId, 'legacy-box');
+  assert.strictEqual(loaded.hooks.guard, true, '其余默认值不受影响');
+  fs.rmSync(getConfigPath()); // 共用同一个临时目录，别把 machineId 漏给后面的用例
 });
 
 test('defaultConfig includes ipcDir and machineId', () => {
