@@ -8,6 +8,7 @@ export const KEY_SEQUENCES = {
   up: '\x1b[A',
   down: '\x1b[B',
   left: '\x1b[D',
+  shiftLeft: '\x1b[1;2D',
   right: '\x1b[C',
   ctrlC: '\x03',
   // 「继续」：Claude Code 停在确认点 / checkpoint 时一键续跑，语义与桌面版同一条

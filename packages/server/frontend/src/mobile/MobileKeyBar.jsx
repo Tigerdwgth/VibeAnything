@@ -85,6 +85,7 @@ export default function MobileKeyBar({
       <KeyButton label="↑" title="上方向键" onClick={send(KEY_SEQUENCES.up)} />
       <KeyButton label="↓" title="下方向键" onClick={send(KEY_SEQUENCES.down)} />
       <KeyButton label="←" title="左方向键" onClick={send(KEY_SEQUENCES.left)} />
+      <KeyButton label="⇧←" title="Shift+左方向键（回答 Codex 问题）" onClick={send(KEY_SEQUENCES.shiftLeft)} />
       <KeyButton label="→" title="右方向键" onClick={send(KEY_SEQUENCES.right)} />
       {/* 手指往上滑看历史之后，tmux 停在 copy-mode 就不跟新输出了；方向键是发给程序的
           按键，回不到底部。这个按钮走 tmux 控制通路，一步跳回最新。 */}

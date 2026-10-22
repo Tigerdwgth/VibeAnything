@@ -61,6 +61,7 @@ describe('按键发出的字节', () => {
     ['↑', KEY_SEQUENCES.up],
     ['↓', KEY_SEQUENCES.down],
     ['←', KEY_SEQUENCES.left],
+    ['⇧←', '\x1b[1;2D'],
     ['→', KEY_SEQUENCES.right],
     ['^C', KEY_SEQUENCES.ctrlC],
     ['继续', KEY_SEQUENCES.resume],
