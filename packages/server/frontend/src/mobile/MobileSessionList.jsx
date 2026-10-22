@@ -4,6 +4,7 @@ import { CLI_CMDS, DEFAULT_LAUNCH_COMMAND } from '../launch-config';
 import { loadLastDir } from '../machine-prefs';
 import { buildSessionTree, flattenFolderPaths, isDescendant } from '../folder-tree';
 import useFolderCollapse from '../useFolderCollapse';
+import SessionSharing from '../SessionSharing';
 import { MobileActionSheet, MobilePromptSheet } from './MobileSheet';
 import {
   getRunningSessionTitle, getRunningSessionDetail, getRunningSessionCommand,
@@ -242,7 +243,7 @@ function SessionRow({ session, machineId, depth, isOpen, isActive, onOpen, onClo
         <div style={{
           color: T.textPrimary, fontSize: '0.88rem', fontWeight: 500,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{getRunningSessionTitle(session)}</div>
+        }}>{getRunningSessionTitle(session)}{session.sharedBy && <span style={{ color: T.accent, marginLeft: 6, fontSize: '0.7rem' }}>共享</span>}</div>
         <div style={{
           color: T.textMuted, fontSize: '0.7rem', fontFamily: T.fontMono,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -277,6 +278,7 @@ function SessionRow({ session, machineId, depth, isOpen, isActive, onOpen, onClo
 }
 
 export default function MobileSessionList({
+  token,
   machines, selectedMachine, onSelectMachine,
   sessions, openSessionIds, activeSessionId,
   onOpen, onCloseTab, onStop, onCreate, onRenameSession,
@@ -331,6 +333,9 @@ export default function MobileSessionList({
       hint: folderPaths.find(f => f.id === session.folderId)?.label || '未分组',
       onSelect: () => setSheet({ kind: 'move-session', session }),
     }];
+    if (session.canShare) {
+      items.unshift({ key: 'share', label: '共享窗口…', onSelect: () => setSheet({ kind: 'share', session }) });
+    }
     if (openSessionIds.has(session.sessionId)) {
       items.push({
         key: 'close',
@@ -521,6 +526,7 @@ export default function MobileSessionList({
         )}
       </div>
 
+      {sheet?.kind === 'share' && <SessionSharing token={token} session={sheet.session} onClose={close} />}
       {sheet?.kind === 'session' && (
         <MobileActionSheet
           title={getRunningSessionTitle(sheet.session)}

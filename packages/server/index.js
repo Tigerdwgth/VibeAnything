@@ -192,6 +192,51 @@ app.post('/api/session-owners/claim-all', authMiddleware, adminMiddleware, async
   res.json({ ok: true, owner, count: claimed.length, claimed });
 });
 
+// 单个窗口的共享名单。收件人获得该终端的查看和操作权限，归属保持不变。
+function sharingTarget(req, res, next) {
+  const { machineId, sessionId } = req.method === 'GET' ? req.query : (req.body || {});
+  if (typeof machineId !== 'string' || !machineId || typeof sessionId !== 'string' || !sessionId) {
+    return res.status(400).json({ error: 'machineId / sessionId 不能为空' });
+  }
+  if (!owners.canManageSharing(req.user, machineId, sessionId)) {
+    return res.status(403).json({ error: '只有窗口所有者或管理员可以管理共享' });
+  }
+  const exists = owners.getOwner(machineId, sessionId) || global.relayServer?.getAllSessions()
+    .some(s => s.machineId === machineId && sessionIdOf(s) === sessionId);
+  if (!exists) return res.status(404).json({ error: '窗口不存在' });
+  req.sharingTarget = { machineId, sessionId };
+  next();
+}
+
+function sharingState(machineId, sessionId) {
+  return { machineId, sessionId, owner: owners.getOwner(machineId, sessionId), users: owners.getShares(machineId, sessionId) };
+}
+
+app.get('/api/session-shares', authMiddleware, sharingTarget, async (req, res) => {
+  const { machineId, sessionId } = req.sharingTarget;
+  const users = await listUsers();
+  res.json({ ...sharingState(machineId, sessionId), availableUsers: users.map(u => u.username) });
+});
+
+app.post('/api/session-shares', authMiddleware, sharingTarget, async (req, res) => {
+  const { machineId, sessionId } = req.sharingTarget;
+  const { username } = req.body;
+  if (typeof username !== 'string' || !username) return res.status(400).json({ error: '请选择共享用户' });
+  if (!await ensureUserExists(username, res)) return;
+  owners.addShare(machineId, sessionId, username);
+  global.relayServer?.refreshSessionLists();
+  res.json(sharingState(machineId, sessionId));
+});
+
+app.delete('/api/session-shares', authMiddleware, sharingTarget, (req, res) => {
+  const { machineId, sessionId } = req.sharingTarget;
+  const { username } = req.body;
+  if (typeof username !== 'string' || !username) return res.status(400).json({ error: '请选择取消共享的用户' });
+  owners.removeShare(machineId, sessionId, username);
+  global.relayServer?.refreshSessionLists();
+  res.json(sharingState(machineId, sessionId));
+});
+
 // 修改密码
 app.post('/api/change-password', authMiddleware, async (req, res) => {
   const { oldPassword, newPassword } = req.body || {};

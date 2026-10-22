@@ -10,6 +10,21 @@ const ADMIN = { username: 'admin', role: 'admin' };
 const ALICE = { username: 'alice', role: 'user' };
 const BOB = { username: 'bob', role: 'user' };
 
+test('共享按窗口和机器隔离，不授权文件夹及再次共享；管理员仅我视图也保留被共享窗口', () => {
+  owners.setOwner('m1', 'shared', 'alice');
+  owners.setFolderOwner('m1', 'folder', 'alice');
+  owners.addShare('m1', 'shared', 'bob');
+  owners.addShare('m1', 'shared', 'admin');
+  assert.equal(owners.canAccess(BOB, 'm1', 'shared'), true);
+  assert.equal(owners.canAccess(BOB, 'm2', 'shared'), false);
+  assert.equal(owners.canAccess(BOB, 'm1', 'other'), false);
+  assert.equal(owners.canAccessFolder(BOB, 'm1', 'folder'), false);
+  assert.equal(owners.canManageSharing(BOB, 'm1', 'shared'), false);
+  assert.equal(owners.canManageSharing(ALICE, 'm1', 'shared'), true);
+  assert.equal(owners.canManageSharing(ADMIN, 'm1', 'shared'), true);
+  assert.equal(owners.canAccess(ADMIN, 'm1', 'shared', { ownOnly: true }), true);
+});
+
 test('未登记的会话没有归属', () => {
   assert.strictEqual(owners.getOwner('m1', 's1'), null);
 });

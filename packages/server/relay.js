@@ -268,8 +268,7 @@ class RelayServer {
     return owners.canAccessFolder(browser?.user, machineId, folderId, { ownOnly: !!browser?.ownOnly });
   }
 
-  // admin 能看到全部会话，额外附上 owner 字段，前端据此显示归属徽章并做转交。
-  // 普通用户拿到的会话一定是自己的，不需要这个字段。
+  // 共享窗口沿用同一套列表和终端权限，管理共享仍只允许原主人或管理员。
   _filterSessions(browser, sessions, machineId) {
     const withOwner = browser?.user?.role === 'admin';
     const out = [];
@@ -278,7 +277,14 @@ class RelayServer {
       if (!sid) continue;
       const mid = machineId || s.machineId;
       if (!this._canAccess(browser, mid, sid)) continue;
-      out.push(withOwner ? { ...s, owner: owners.getOwner(mid, sid) } : s);
+      const owner = owners.getOwner(mid, sid);
+      out.push({
+        ...s,
+        ...(withOwner ? { owner } : {}),
+        canShare: owners.canManageSharing(browser.user, mid, sid),
+        sharedBy: owners.getShares(mid, sid).includes(browser.user.username) && owner !== browser.user.username
+          ? (owner || '管理员') : null,
+      });
     }
     return out;
   }
@@ -443,8 +449,19 @@ class RelayServer {
    * 否则内容未变会跳过广播，前端要等下一轮轮询才看到结果。
    */
   refreshSessionLists() {
-    for (const b of this.browsers.values()) b.lastListHash = '';
+    for (const b of this.browsers.values()) {
+      b.lastListHash = '';
+      for (const watchKey of [...b.watching.keys()]) {
+        const { machineId, id } = owners.parseKey(watchKey);
+        if (this._canAccess(b, machineId, id)) continue;
+        this._releaseViewer(b, watchKey);
+        this._denyAccess(b, 'sharing', machineId, id);
+      }
+    }
     this._broadcastSessionList();
+    for (const [machineId, m] of this.machines) {
+      this._broadcast({ type: 'active_sessions', machineId, sessions: m.sessions });
+    }
     this._toMachines({ type: 'scan_active' });
   }
 

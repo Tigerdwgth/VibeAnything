@@ -241,13 +241,13 @@ export default function MobileShell({ token, onLogout, isDark, onToggleTheme }) 
           {isDark ? '☀' : '🌙'}
         </button>
         {/* 顶栏不放退出按钮（用户 2026-09-22 明确要求去掉）：它紧挨着高频的主题按钮，
-            误触一下就要重登一次。token 失效时 useRelay 收到 4001 仍会自动退出登录，
+            误触一下就要重登一次。token 被撤销时 useRelay 收到 4001 → 续期被拒 → 自动退出登录，
             那条路不受影响。要手动退出去桌面版。 */}
       </div>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
         {openTerminals.length === 0 ? (
-          <MobileSessionList {...sessionListProps} />
+          <MobileSessionList {...sessionListProps} token={token} />
         ) : (
           openTerminals.map(t => (
             <MobileTerminal
@@ -274,7 +274,7 @@ export default function MobileShell({ token, onLogout, isDark, onToggleTheme }) 
               boxShadow: '4px 0 24px rgba(0,0,0,0.5)',
               display: 'flex', flexDirection: 'column',
             }}>
-              <MobileSessionList {...sessionListProps} />
+              <MobileSessionList {...sessionListProps} token={token} />
             </div>
           </>
         )}

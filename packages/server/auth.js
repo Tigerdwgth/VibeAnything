@@ -35,6 +35,12 @@ async function getDb() {
     created_at INTEGER NOT NULL,
     PRIMARY KEY (machine_id, session_id)
   )`);
+  _db.run(`CREATE TABLE IF NOT EXISTS session_shares (
+    machine_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    PRIMARY KEY (machine_id, session_id, username)
+  )`);
   // 会话分组文件夹的归属台账。文件夹树本身存在各开发机（lib/session-metadata.js），
   // 那是所有用户共用的一份数据，归属只能记在 relay 这边。
   _db.run(`CREATE TABLE IF NOT EXISTS folder_owners (

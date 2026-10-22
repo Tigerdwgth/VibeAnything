@@ -6,6 +6,7 @@ import { DEFAULT_LAUNCH_COMMAND } from './launch-config';
 import { buildSessionTree, flattenFolderPaths, isDescendant } from './folder-tree';
 import useFolderCollapse from './useFolderCollapse';
 import ContextMenu from './ContextMenu';
+import SessionSharing from './SessionSharing';
 import { MOUSE_DRAG_ACTIVATION, TOUCH_DRAG_ACTIVATION, DRAGGABLE_TOUCH_ACTION } from './dnd-activation';
 import {
   getRunningSessionCommand,
@@ -120,7 +121,8 @@ function SessionItem({ session, machineId, depth, active, isOpened, onOpen, onSt
         {session._optimistic && (
           <span style={{ color: T.warning, fontSize: '0.62rem', animation: 'pulse 1.5s infinite', flexShrink: 0 }}>恢复中…</span>
         )}
-        {/* 归属徽章：后端仅对 admin 下发 owner 字段，普通用户看到的都是自己的会话，不显示。
+        {session.sharedBy && <span title={`由 ${session.sharedBy} 共享`} style={{ color: T.accent, fontSize: '0.62rem' }}>共享</span>}
+        {/* 归属徽章：后端仅对 admin 下发 owner 字段。
             owner 为 null = 无主会话（仅 admin 可见），标成「无主」提示需要转交。 */}
         {'owner' in session && (
           <span
@@ -269,6 +271,7 @@ function MachineRunningGroup({ machineId, sessions, folders, active, openSession
     }
     const sid = target.session.sessionId;
     return [
+      ...(target.session.canShare ? [{ label: '共享窗口…', onClick: () => callbacks.onShare({ ...target.session, machineId }) }] : []),
       { label: '✎ 重命名', onClick: () => setEditingKey(`sess:${sid}`) },
       null,
       { label: '↳ 移动到根目录', onClick: () => callbacks.onMoveSession(machineId, sid, null) },
@@ -339,7 +342,7 @@ function MachineRunningGroup({ machineId, sessions, folders, active, openSession
   );
 }
 
-function RunningTab({ activeSessions, foldersByMachine, openTerminals = [], active, onOpen, onStop, onClose, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder }) {
+function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals = [], active, onOpen, onStop, onClose, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder }) {
   const T = useTheme();
   // 鼠标：移动 5px 即开拖（避免点击会话项 attach 终端被误判为拖拽）。
   // 触屏：长按 250ms 才开拖，之前划动超过 5px 取消拖拽还给
@@ -373,7 +376,7 @@ function RunningTab({ activeSessions, foldersByMachine, openTerminals = [], acti
   };
 
   // onClose：关闭已打开 Tab（不杀进程），随 callbacks 一路透传到 SessionItem
-  const callbacks = { onOpen, onStop, onClose, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder };
+  const callbacks = { onShare, onOpen, onStop, onClose, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder };
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
@@ -545,10 +548,11 @@ function EmptyState({ text }) {
 }
 
 // ── 主组件 ────────────────────────────────────────────────────
-export default function SessionTabs({ sessions, activeSessions, foldersByMachine = {}, historySessions, openTerminals, active, onOpen, onClose, onDelete, onStop, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder, ws, machineId, machines, onLaunch, onPreviewMd, onSelectMachine }) {
+export default function SessionTabs({ token, sessions, activeSessions, foldersByMachine = {}, historySessions, openTerminals, active, onOpen, onClose, onDelete, onStop, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder, ws, machineId, machines, onLaunch, onPreviewMd, onSelectMachine }) {
   const T = useTheme();
   // 默认进「会话」Tab（原“运行中”，已合并“已打开”）
   const [tab, setTab] = useState('running');
+  const [sharingSession, setSharingSession] = useState(null);
 
   const tabs = [
     { key: 'running', label: '会话', count: activeSessions.length },
@@ -594,7 +598,8 @@ export default function SessionTabs({ sessions, activeSessions, foldersByMachine
         ))}
       </div>
 
-      {tab === 'running' && <RunningTab activeSessions={activeSessions} foldersByMachine={foldersByMachine} openTerminals={openTerminals} active={active} onOpen={onOpen} onStop={onStop} onClose={onClose} onRenameSession={onRenameSession} onMoveSession={onMoveSession} onCreateFolder={onCreateFolder} onRenameFolder={onRenameFolder} onDeleteFolder={onDeleteFolder} onMoveFolder={onMoveFolder} />}
+      {sharingSession && <SessionSharing token={token} session={sharingSession} onClose={() => setSharingSession(null)} />}
+      {tab === 'running' && <RunningTab onShare={setSharingSession} activeSessions={activeSessions} foldersByMachine={foldersByMachine} openTerminals={openTerminals} active={active} onOpen={onOpen} onStop={onStop} onClose={onClose} onRenameSession={onRenameSession} onMoveSession={onMoveSession} onCreateFolder={onCreateFolder} onRenameFolder={onRenameFolder} onDeleteFolder={onDeleteFolder} onMoveFolder={onMoveFolder} />}
       {tab === 'history' && <HistoryTab historySessions={historySessions} active={active} onOpen={onOpen} onDelete={onDelete} />}
       {tab === 'files'   && <FileBrowser ws={ws} machineId={machineId} machines={machines} historySessions={historySessions} onLaunch={onLaunch} onPreviewMd={onPreviewMd} onSelectMachine={onSelectMachine} />}
     </div>

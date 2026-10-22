@@ -701,6 +701,7 @@ export default function Dashboard({ token, onLogout, isDark, onToggleTheme }) {
                 onSelect={chooseMachine}
               />
               <SessionTabs
+                token={token}
                 sessions={filteredSessions}
                 activeSessions={activeSessions}
                 foldersByMachine={foldersByMachine}

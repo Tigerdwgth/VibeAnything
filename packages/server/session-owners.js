@@ -137,14 +137,59 @@ function createLedger({ table, idColumn, rootAllowed = false }) {
 
 const sessions = createLedger({ table: 'session_owners', idColumn: 'session_id' });
 const folders  = createLedger({ table: 'folder_owners',  idColumn: 'folder_id', rootAllowed: true });
+const shares = new Map(); // machineId:sessionId → Set<username>
 
-/** 从 SQLite 载入两本台账到内存缓存。启动时调用一次，返回会话台账条数。 */
+function getShares(machineId, sessionId) {
+  return [...(shares.get(key(machineId, sessionId)) || [])];
+}
+
+function persistShares(machineId, sessionId) {
+  if (!_db) return;
+  _db.run('DELETE FROM session_shares WHERE machine_id = ? AND session_id = ?', [machineId, sessionId]);
+  for (const username of getShares(machineId, sessionId)) {
+    _db.run('INSERT INTO session_shares (machine_id, session_id, username) VALUES (?, ?, ?)', [machineId, sessionId, username]);
+  }
+  _saveDb(_db);
+}
+
+function addShare(machineId, sessionId, username) {
+  if (!machineId || !sessionId || !username) return false;
+  const k = key(machineId, sessionId);
+  const recipients = shares.get(k) || new Set();
+  if (recipients.has(username)) return true;
+  recipients.add(username);
+  shares.set(k, recipients);
+  persistShares(machineId, sessionId);
+  return true;
+}
+
+function removeShare(machineId, sessionId, username) {
+  const k = key(machineId, sessionId);
+  const recipients = shares.get(k);
+  if (!recipients?.delete(username)) return false;
+  if (!recipients.size) shares.delete(k);
+  persistShares(machineId, sessionId);
+  return true;
+}
+
+function canManageSharing(user, machineId, sessionId) {
+  return !!user?.username && (user.role === 'admin' || sessions.get(machineId, sessionId) === user.username);
+}
+
+/** 从 SQLite 载入归属与共享台账。启动时调用一次，返回会话台账条数。 */
 async function init() {
   const { getDb, saveDb } = require('./auth');
   _saveDb = saveDb;
   _db = await getDb();
   const count = sessions.load();
   folders.load();
+  shares.clear();
+  const rows = _db.exec('SELECT machine_id, session_id, username FROM session_shares');
+  for (const [machineId, sessionId, username] of (rows[0]?.values || [])) {
+    const k = key(machineId, sessionId);
+    if (!shares.has(k)) shares.set(k, new Set());
+    shares.get(k).add(username);
+  }
   return count;
 }
 
@@ -152,9 +197,29 @@ async function init() {
 const getOwner       = (machineId, sessionId)        => sessions.get(machineId, sessionId);
 const setOwner       = (machineId, sessionId, owner) => sessions.set(machineId, sessionId, owner);
 const setOwners      = (entries)                     => sessions.setMany(entries);
-const removeOwner    = (machineId, sessionId)        => sessions.remove(machineId, sessionId);
-const renameSession  = (machineId, oldId, newId)     => sessions.rename(machineId, oldId, newId);
-const canAccess      = (user, machineId, sessionId, opts) => sessions.canAccess(user, machineId, sessionId, opts);
+function removeOwner(machineId, sessionId) {
+  const removed = sessions.remove(machineId, sessionId);
+  if (shares.delete(key(machineId, sessionId))) persistShares(machineId, sessionId);
+  return removed;
+}
+
+function renameSession(machineId, oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return false;
+  const renamed = sessions.rename(machineId, oldId, newId);
+  const recipients = shares.get(key(machineId, oldId));
+  if (!recipients) return renamed;
+  shares.set(key(machineId, newId), recipients);
+  shares.delete(key(machineId, oldId));
+  if (_db) {
+    _db.run('UPDATE session_shares SET session_id = ? WHERE machine_id = ? AND session_id = ?', [newId, machineId, oldId]);
+    _saveDb(_db);
+  }
+  return true;
+}
+
+const canAccess = (user, machineId, sessionId, opts) =>
+  sessions.canAccess(user, machineId, sessionId, opts) ||
+  (!!user?.username && !!shares.get(key(machineId, sessionId))?.has(user.username));
 const listOwners     = () => sessions.list().map(({ machineId, id, owner }) => ({ machineId, sessionId: id, owner }));
 
 // ── 分组文件夹归属 ──────────────────────────────────────────
@@ -238,6 +303,7 @@ function inferFolderOwners(machineId, folderList, sessionList) {
 function _resetForTest() {
   sessions._reset();
   folders._reset();
+  shares.clear();
   _db = null;
   _saveDb = null;
 }
@@ -245,6 +311,7 @@ function _resetForTest() {
 module.exports = {
   init, key, parseKey,
   getOwner, setOwner, setOwners, removeOwner, renameSession, listOwners, canAccess,
+  getShares, addShare, removeShare, canManageSharing,
   getFolderOwner, setFolderOwner, setFolderOwners, removeFolderOwner,
   listFolderOwners, canAccessFolder, folderLedgerSize, inferFolderOwners,
   _resetForTest,
