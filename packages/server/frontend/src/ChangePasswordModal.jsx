@@ -36,7 +36,8 @@ export default function ChangePasswordModal({ onClose, onSuccess }) {
       });
 
       if (res.ok) {
-        onSuccess();
+        const { token: renewedToken } = await res.json();
+        onSuccess(renewedToken);
       } else {
         const { error: msg } = await res.json();
         setError(msg || '修改失败');

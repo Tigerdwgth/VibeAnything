@@ -481,6 +481,16 @@ class RelayServer {
     return browserId;
   }
 
+  /**
+   * 该用户的 token_version 变了（改密码）：已建立的浏览器连接握手时的票已作废，
+   * 以 4001 断开。前端收到 4001 会先拿最新票续期再重连，换过新票的设备无感。
+   */
+  disconnectUser(username) {
+    for (const browser of this.browsers.values()) {
+      if (browser.user.username === username) browser.ws.close(4001, 'Unauthorized');
+    }
+  }
+
   /** 断线清理：先释放它看着的会话（否则开发机上的 attach 客户端永远挂着），再摘掉连接。 */
   _removeBrowser(browserId) {
     const browser = this.browsers.get(browserId);

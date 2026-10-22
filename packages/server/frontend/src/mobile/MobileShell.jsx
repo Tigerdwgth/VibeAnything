@@ -36,7 +36,7 @@ const TOPBAR_BTN = (T) => ({
   fontSize: '1.05rem', flexShrink: 0,
 });
 
-export default function MobileShell({ token, onLogout, isDark, onToggleTheme }) {
+export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme }) {
   const T = useTheme();
   const [openTerminals, setOpenTerminals] = useState(() => readJson(OPEN_KEY, []));
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem(ACTIVE_KEY) || null);
@@ -91,7 +91,7 @@ export default function MobileShell({ token, onLogout, isDark, onToggleTheme }) 
     foldersByMachine, actionError, clearActionError,
     renameSession, moveSession, createFolder, renameFolder, deleteFolder, moveFolder,
   } = useRelay(token, {
-    onAuthFailed: onLogout,
+    onAuthFailed,
     onSessionDenied: closeTab,
     onSessionRenamed: handleSessionRenamed,
   });

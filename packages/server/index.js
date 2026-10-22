@@ -94,9 +94,19 @@ app.post('/api/login', async (req, res) => {
   res.json({ token, username: user.username });
 });
 
+// 滑动续期：凭一张仍有效的 token 换一张新的 30 天票，载荷与登录一致。
+// role 在这里重新取自库 —— 它平时只认票里的值，续期就是它跟上库里变更的时机；
+// 用户已被删时 getProfile 为空，同样回 401。票已过期 / 已被撤销则在 authMiddleware 就被拒了。
+app.post('/api/session/refresh', authMiddleware, async (req, res) => {
+  const profile = await getProfile(req.user.username);
+  if (!profile) return res.status(401).json({ error: '用户已不存在，请重新登录' });
+  const { id, username, role } = profile;
+  res.json({ token: generateToken({ id, username, role }), username });
+});
+
 // 当前用户信息。
 // role 仍取自 JWT（授权判定的单一真源就是这张票，和 WS 的 whoami 保持一致）；
-// nickname / avatar 则每次查库 —— token 24h 才换一次，改完昵称要等到明天才生效说不过去。
+// nickname / avatar 则每次查库 —— token 要隔很久才续期，改完昵称不能等到那时才生效。
 app.get('/api/me', authMiddleware, async (req, res) => {
   const profile = await getProfile(req.user.username);
   if (!profile) return res.status(401).json({ error: '用户已不存在，请重新登录' });
@@ -250,7 +260,11 @@ app.post('/api/change-password', authMiddleware, async (req, res) => {
   try {
     const { updatePassword } = require('./auth');
     await updatePassword(req.user.username, oldPassword, newPassword);
-    res.json({ success: true, message: '密码修改成功' });
+    // updatePassword 让所有旧票作废，给当前设备补发一张新的，否则它自己也掉线。
+    // 已建立的 WS 在响应送出之后再踢：先让新票到达前端，前端收到 4001 才有票可续。
+    const { id, username, role } = await getProfile(req.user.username);
+    res.on('finish', () => global.relayServer?.disconnectUser(username));
+    res.json({ success: true, message: '密码修改成功', token: generateToken({ id, username, role }) });
   } catch (e) {
     if (e.message.includes('Invalid old password')) {
       return res.status(401).json({ error: '旧密码错误' });
@@ -457,7 +471,8 @@ function startServer(opts = {}) {
     server = http.createServer(app);
   }
   // 先载入归属台账再开始监听：台账为空时所有会话都会被判为无主，
-  // 普通用户会在这个窗口内看到空列表。
+  // 普通用户会在这个窗口内看到空列表。（同一次 getDb 也把 token_version 载入内存，
+  // verifyToken 在此之前一律拒绝，所以握手必须排在它后面。）
   owners.init().then(async (count) => {
     console.log(`[relay] 会话归属台账已载入 ${count} 条，文件夹 ${owners.folderLedgerSize()} 条`);
     // 机器台账同样要在开始接受握手之前载入：空台账会让所有装过机的机器退回旧名单判定，

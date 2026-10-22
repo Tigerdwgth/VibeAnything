@@ -46,7 +46,8 @@ class FakeWebSocket extends window.EventTarget {
 let host;
 let root;
 let origWebSocket;
-let logout = 0;
+let authFailed = 0;
+let freshToken = null;   // onAuthFailed（续期）resolve 的新票；null = 续期没换成
 
 const SESSIONS = [
   { sessionId: 'cc-one', cwd: '/work/alpha', isRunning: true, mtime: new Date().toISOString() },
@@ -59,7 +60,7 @@ function mount() {
   act(() => {
     root.render(
       <ThemeContext.Provider value={DARK}>
-        <MobileShell token="tok" onLogout={() => { logout += 1; }} isDark onToggleTheme={() => {}} />
+        <MobileShell token="tok" onAuthFailed={async () => { authFailed += 1; return freshToken; }} isDark onToggleTheme={() => {}} />
       </ThemeContext.Provider>
     );
   });
@@ -98,7 +99,8 @@ beforeEach(() => {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
-  logout = 0;
+  authFailed = 0;
+  freshToken = null;
   localStorage.clear();
   FakeWebSocket.instances = [];
   origWebSocket = globalThis.WebSocket;
@@ -121,10 +123,10 @@ describe('连接', () => {
     expect(ws().url).toMatch(/ownOnly=[01]/);
   });
 
-  test('relay 判 token 失效（4001）→ 退出登录，不重连', () => {
+  test('relay 判 token 失效（4001）→ 交给续期逻辑，不立刻重连', () => {
     mount();
     act(() => { ws().onclose?.({ code: 4001, reason: 'Unauthorized' }); });
-    expect(logout).toBe(1);
+    expect(authFailed).toBe(1);
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });

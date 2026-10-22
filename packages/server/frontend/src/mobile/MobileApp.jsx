@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Login from '../Login';
 import Register from '../Register';
 import { ThemeContext, getTheme } from '../theme';
+import { useSessionRefresh } from '../session-refresh';
 import MobileShell from './MobileShell';
 
 // 手机版的根组件。登录态与主题**沿用桌面版的同一份 localStorage 键**
@@ -33,10 +34,13 @@ export default function MobileApp() {
     setPage('login');
   }
 
+  // 续期换到的新票和登录拿到的票落地方式相同（写 localStorage + 置状态），所以复用 handleLogin。
+  const refreshSession = useSessionRefresh(token, handleLogin, handleLogout);
+
   return (
     <ThemeContext.Provider value={getTheme(isDark)}>
       {token
-        ? <MobileShell token={token} onLogout={handleLogout} isDark={isDark} onToggleTheme={toggleTheme} />
+        ? <MobileShell token={token} onAuthFailed={refreshSession} isDark={isDark} onToggleTheme={toggleTheme} />
         : page === 'register'
           ? <Register onLogin={handleLogin} onBack={() => setPage('login')} />
           : <Login onLogin={handleLogin} onRegister={() => setPage('register')} isDark={isDark} onToggleTheme={toggleTheme} />

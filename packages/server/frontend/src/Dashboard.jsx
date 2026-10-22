@@ -70,7 +70,7 @@ const splitBtnStyle = (T, enabled, { danger = false } = {}) => ({
   transition: 'all 0.15s',
 });
 
-export default function Dashboard({ token, onLogout, isDark, onToggleTheme }) {
+export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewed, isDark, onToggleTheme }) {
   const T = useTheme();
   const sidebar = useResizable({ min: 160, max: 400, defaultWidth: 240 });
   const [sessions, setSessions]             = useState([]);
@@ -111,7 +111,7 @@ export default function Dashboard({ token, onLogout, isDark, onToggleTheme }) {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   // 个人信息（昵称 / 头像）。走 HTTP 而不是 whoami：昵称改完要立刻生效，
-  // 而 whoami 来自 24h 才换一次的 JWT，那里塞不进会变的字段。
+  // 而 whoami 来自要隔很久才续期的 JWT，那里塞不进会变的字段。
   const [profile, setProfile] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);   // 由 relay 连接时下发的 whoami 决定
   const [username, setUsername] = useState('');    // 同上，用量面板「仅我」要用
@@ -120,6 +120,12 @@ export default function Dashboard({ token, onLogout, isDark, onToggleTheme }) {
   // 这里只是记住选择并同步给 relay。
   const [hideOthers, setHideOthers] = useState(loadHideOthers);
   const wsRef = useRef(null);
+  // 重连要用最新的票：续期会换票，而连接的 effect 只建一次（换票不能让终端断线重连），
+  // 闭包里的 token 会过时。
+  const tokenRef = useRef(token);
+  useEffect(() => { tokenRef.current = token; }, [token]);
+  const authCallbacksRef = useRef({ onAuthFailed });
+  useEffect(() => { authCallbacksRef.current = { onAuthFailed }; });
   // ws 的 onmessage 是建连那一刻的闭包，而 notify 每次渲染都是新函数 —— 走 ref 拿最新的那个
   const notifyRef = useRef(notify);
 
@@ -186,7 +192,7 @@ export default function Dashboard({ token, onLogout, isDark, onToggleTheme }) {
       // ownOnly 随握手带上（原因见 relay.js 的浏览器连接处）。直接读偏好而不是读
       // state：切开关时同步写了偏好，两者恒等，这样也不必把 hideOthers 放进 deps 重连。
       const scope = loadHideOthers() ? '1' : '0';
-      const wsUrl = `${proto}://${location.host}${basePath}/ws?token=${token}&ownOnly=${scope}`;
+      const wsUrl = `${proto}://${location.host}${basePath}/ws?token=${tokenRef.current}&ownOnly=${scope}`;
       console.log('[dashboard] WebSocket connecting to:', wsUrl);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -267,17 +273,27 @@ export default function Dashboard({ token, onLogout, isDark, onToggleTheme }) {
       ws.onclose = (e) => {
         console.log('[dashboard] WebSocket closed:', e.code, e.reason);
         setWsReady(false);
-        // Token 无效 → 登出，不重连
-        if (e.code === 4001) { onLogout(); return; }
-        // 其他关闭 → 自动重连（指数退避）
-        if (!disposed) {
-          console.log(`[dashboard] ${reconnectDelay / 1000}s 后自动重连...`);
-          reconnectTimer = setTimeout(() => {
-            reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
-            createWs();
-          }, reconnectDelay);
+        if (e.code === 4001) {
+          // 票失效不等于登录失效：多半只是改过密码 / 服务端撤销了旧版本，先续期换票。
+          // 真被撤销时续期被拒，App 会退出登录，本组件卸载后 disposed 为真，不再重连。
+          Promise.resolve(authCallbacksRef.current.onAuthFailed()).then((fresh) => {
+            if (fresh) tokenRef.current = fresh;
+            scheduleReconnect();
+          });
+          return;
         }
+        // 其他关闭 → 自动重连（指数退避）
+        scheduleReconnect();
       };
+    }
+
+    function scheduleReconnect() {
+      if (disposed) return;
+      console.log(`[dashboard] ${reconnectDelay / 1000}s 后自动重连...`);
+      reconnectTimer = setTimeout(() => {
+        reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+        createWs();
+      }, reconnectDelay);
     }
 
     createWs();
@@ -286,7 +302,7 @@ export default function Dashboard({ token, onLogout, isDark, onToggleTheme }) {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [token]);
+  }, []);
 
   // 在线机器列表到达/变化后确定默认开发机：优先用户上次的选择，其次主力开发机 macmini。
   // 选中的机器掉线时也在这里回落，避免侧边栏与目录树空着却没有任何提示。
@@ -1058,12 +1074,11 @@ export default function Dashboard({ token, onLogout, isDark, onToggleTheme }) {
       {showPasswordModal && (
         <ChangePasswordModal
           onClose={() => setShowPasswordModal(false)}
-          onSuccess={() => {
+          onSuccess={(renewedToken) => {
             setShowPasswordModal(false);
-            // 这一处**故意**保留 alert：紧接着就强制退出登录，行内提示会随页面卸载一起消失，
-            // 用户不会知道密码已经改了。阻塞一次换来「看见了再走」。
-            alert('密码修改成功，请重新登录');
-            onLogout();
+            // 改密码会让所有旧票作废；服务端给当前设备补发了新票，存下它，本设备不掉线。
+            onTokenRenewed(renewedToken);
+            notify('密码已修改，其他设备需要重新登录');
           }}
         />
       )}

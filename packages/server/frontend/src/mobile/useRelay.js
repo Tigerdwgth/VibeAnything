@@ -16,9 +16,12 @@ const INITIAL_RECONNECT_DELAY = 1000;
 const HOOK_STATE_RUNNING = 'running';
 
 /**
- * @param {string} token 登录 JWT
+ * @param {string} token 登录 JWT。只用于判断是否已登录：重连时取的是最新票（tokenRef），
+ *        续期换票不会让连接重建。
  * @param {object} handlers
- * @param {() => void} handlers.onAuthFailed      relay 回 4001（token 失效）→ 退出登录
+ * @param {() => Promise<string|null>} handlers.onAuthFailed
+ *        relay 回 4001（token 失效）→ 去续期：resolve 新票就用它重连；
+ *        续期被拒时调用方已退出登录（组件卸载），其余情况（断网等）resolve null，按退避重连
  * @param {(machineId: string, sessionId: string) => void} [handlers.onSessionDenied]
  *        会话归属鉴权被拒：把这个会话的终端关掉，否则它会每次重连都重试
  * @param {(machineId: string, oldSessionId: string, newSessionId: string) => void} [handlers.onSessionRenamed]
@@ -36,13 +39,17 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
   const [isAdmin, setIsAdmin] = useState(false);
   const [username, setUsername] = useState('');
   const wsRef = useRef(null);
+  // 重连要用最新的票：续期会换票，而连接的 effect 只在登录态变化时重建，闭包里的 token 会过时
+  const tokenRef = useRef(token);
+  useEffect(() => { tokenRef.current = token; }, [token]);
 
   // 回调放 ref：它们来自组件，每次渲染都是新函数；进 deps 会让 WS 每渲染一次就重连
   const handlersRef = useRef({ onAuthFailed, onSessionDenied, onSessionRenamed });
   useEffect(() => { handlersRef.current = { onAuthFailed, onSessionDenied, onSessionRenamed }; });
 
+  const loggedIn = Boolean(token);
   useEffect(() => {
-    if (!token) return undefined;
+    if (!loggedIn) return undefined;
     let reconnectTimer = null;
     let reconnectDelay = INITIAL_RECONNECT_DELAY;
     let disposed = false;
@@ -93,7 +100,7 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
       const basePath = location.pathname.replace(/\/m(\/.*)?$/, '').replace(/\/+$/, '');
       // ownOnly 与桌面版共用同一份偏好：同一个浏览器里两个页面对「看谁的会话」要一致
       const scope = loadHideOthers() ? '1' : '0';
-      const socket = new WebSocket(`${proto}://${location.host}${basePath}/ws?token=${token}&ownOnly=${scope}`);
+      const socket = new WebSocket(`${proto}://${location.host}${basePath}/ws?token=${tokenRef.current}&ownOnly=${scope}`);
       wsRef.current = socket;
       setWs(socket);
 
@@ -109,13 +116,25 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
       socket.onerror = (e) => console.error('[mobile] WebSocket error:', e);
       socket.onclose = (e) => {
         setWsReady(false);
-        if (e.code === 4001) { handlersRef.current.onAuthFailed?.(); return; }
-        if (disposed) return;
-        reconnectTimer = setTimeout(() => {
-          reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
-          createWs();
-        }, reconnectDelay);
+        if (e.code === 4001) {
+          // 票失效不等于登录失效：多半只是改过密码 / 服务端撤销了旧版本，先续期换票。
+          // 真被撤销时续期被拒，调用方会退出登录，组件卸载后 disposed 为真，不再重连。
+          Promise.resolve(handlersRef.current.onAuthFailed()).then((fresh) => {
+            if (fresh) tokenRef.current = fresh;
+            scheduleReconnect();
+          });
+          return;
+        }
+        scheduleReconnect();
       };
+    }
+
+    function scheduleReconnect() {
+      if (disposed) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+        createWs();
+      }, reconnectDelay);
     }
 
     createWs();
@@ -124,7 +143,7 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
       if (reconnectTimer) clearTimeout(reconnectTimer);
       wsRef.current?.close();
     };
-  }, [token]);
+  }, [loggedIn]);
 
   const send = useCallback((payload) => {
     const socket = wsRef.current;

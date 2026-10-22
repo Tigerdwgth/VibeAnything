@@ -7,9 +7,14 @@ const path = require('node:path');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'users.db');
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
-const JWT_EXPIRES = '24h';
+// 会话有效期是**滑动**的：前端定期调 POST /api/session/refresh 换新票，
+// 30 天内打开过的设备永远不必重新登录。收回登录态靠 users.token_version，不靠缩短有效期。
+const SESSION_LIFETIME = '30d';
 
 let _db = null;
+// username → token_version 的内存镜像。relay 的 WS 握手是同步调 verifyToken 的，
+// 不能在里面异步查库，所以启动载入、改动时同步更新；null = 尚未载入（见 verifyToken）。
+let _tokenVersions = null;
 
 async function getDb() {
   if (_db) return _db;
@@ -74,6 +79,8 @@ async function getDb() {
   )`);
   migrateRoleColumn(_db);
   migrateProfileColumns(_db);
+  migrateTokenVersionColumn(_db);
+  _tokenVersions = loadTokenVersions(_db);
   return _db;
 }
 
@@ -101,6 +108,23 @@ function migrateProfileColumns(db) {
   if (!cols.includes('nickname')) { db.run('ALTER TABLE users ADD COLUMN nickname TEXT'); changed = true; }
   if (!cols.includes('avatar'))   { db.run('ALTER TABLE users ADD COLUMN avatar TEXT');   changed = true; }
   if (changed) saveDb(db);
+}
+
+// users.token_version 迁移：JWT 里带 tv，与库里当前值不等即作废（改密码 +1 = 踢掉所有旧设备）。
+// 老库补列后全员为 0，而老 token 没有 tv 字段按 0 算 —— 部署当下已登录的设备不会被踢。
+function migrateTokenVersionColumn(db) {
+  if (tableColumns(db, 'users').includes('token_version')) return;
+  db.run('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
+  saveDb(db);
+}
+
+function loadTokenVersions(db) {
+  const rows = db.exec('SELECT username, token_version FROM users');
+  return new Map(rows.length ? rows[0].values : []);
+}
+
+function currentTokenVersion(username) {
+  return _tokenVersions.get(username) ?? 0;
 }
 
 function isAdmin(user) {
@@ -137,16 +161,23 @@ async function verifyPassword(username, password) {
   return ok ? { id, username: uname, role: role || 'user' } : null;
 }
 
+// tv 由这里统一盖章，调用方（登录 / 注册 / 续期 / 改密码）不用各自记得带。
 function generateToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+  if (!_tokenVersions) throw new Error('token_version 尚未载入，须先 await getDb()');
+  return jwt.sign({ ...payload, tv: currentTokenVersion(payload.username) }, JWT_SECRET, { expiresIn: SESSION_LIFETIME });
 }
 
+// 同步校验（relay 握手要用）：签名 + 有效期 + tv 与当前版本一致。
+// 没有 tv 的存量 token 按 0 处理。版本缓存没载入时一律拒绝，宁可全员 401 也不放行已撤销的票。
 function verifyToken(token) {
+  if (!_tokenVersions) return null;
+  let payload;
   try {
-    return jwt.verify(token, JWT_SECRET);
+    payload = jwt.verify(token, JWT_SECRET);
   } catch {
     return null;
   }
+  return (payload.tv ?? 0) === currentTokenVersion(payload.username) ? payload : null;
 }
 
 function authMiddleware(req, res, next) {
@@ -179,9 +210,10 @@ async function updatePassword(username, oldPassword, newPassword) {
   const valid = await bcrypt.compare(oldPassword, hash);
   if (!valid) throw new Error('Invalid old password');
 
-  // 更新密码
+  // 更新密码，同一条语句里 token_version +1：其他设备手里的票立即作废
   const newHash = await bcrypt.hash(newPassword, 12);
-  db.run('UPDATE users SET password_hash = ? WHERE username = ?', [newHash, username]);
+  db.run('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE username = ?', [newHash, username]);
+  _tokenVersions.set(username, db.exec('SELECT token_version FROM users WHERE username = ?', [username])[0].values[0][0]);
   saveDb(db);
   return true;
 }
