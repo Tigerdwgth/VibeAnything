@@ -2,7 +2,10 @@ import { useMemo, useState } from 'react';
 import { useTheme } from '../theme';
 import { CLI_CMDS, DEFAULT_LAUNCH_COMMAND } from '../launch-config';
 import { loadLastDir } from '../machine-prefs';
-import { buildSessionTree, flattenFolderPaths, isDescendant } from '../folder-tree';
+import {
+  buildSessionTree, flattenFolderPaths, isDescendant,
+  partitionByOwner, shouldGroupByOwner, sortOwnerKeys, UNOWNED_OWNER_KEY,
+} from '../folder-tree';
 import useFolderCollapse from '../useFolderCollapse';
 import SessionSharing from '../SessionSharing';
 import { MobileActionSheet, MobilePromptSheet } from './MobileSheet';
@@ -278,7 +281,7 @@ function SessionRow({ session, machineId, depth, isOpen, isActive, onOpen, onClo
 }
 
 export default function MobileSessionList({
-  token,
+  token, selfUsername,
   machines, selectedMachine, onSelectMachine,
   sessions, openSessionIds, activeSessionId,
   onOpen, onCloseTab, onStop, onCreate, onRenameSession,
@@ -303,6 +306,16 @@ export default function MobileSessionList({
   );
 
   const folderPaths = useMemo(() => flattenFolderPaths(folders), [folders]);
+
+  // 管理员看全部会话：这台机器上的会话再按归属人分段（不需要分组时为 null，规则同桌面版）
+  const ownerSections = useMemo(() => {
+    const parts = partitionByOwner(folders, sessions);
+    if (!shouldGroupByOwner(parts.keys(), sessions, selfUsername)) return null;
+    return sortOwnerKeys(parts.keys(), selfUsername).map(owner => ({
+      owner, count: parts.get(owner).sessions.length,
+      ...buildSessionTree(parts.get(owner).folders, parts.get(owner).sessions),
+    }));
+  }, [folders, sessions, selfUsername]);
 
   // 新建会话时的目录快捷选项：这台机器上已有会话的 cwd（最常见的就是接着在同一个项目里开一个）
   const cwdSuggestions = useMemo(() => {
@@ -416,11 +429,12 @@ export default function MobileSessionList({
   }
 
   // ── 递归渲染一层 ──
-  function renderFolder(node, depth) {
+  // keyPrefix：分段显示时同一个文件夹可能作为祖先出现在几段里，React key 要带段名
+  function renderFolder(node, depth, keyPrefix = '') {
     const collapsed = isCollapsed(node.id);
     const rows = [
       <FolderRow
-        key={`f:${node.id}`}
+        key={`${keyPrefix}f:${node.id}`}
         node={node} depth={depth} collapsed={collapsed}
         onToggle={toggle}
         onMenu={(n) => setSheet({ kind: 'folder', node: n })}
@@ -428,11 +442,11 @@ export default function MobileSessionList({
       />,
     ];
     if (collapsed) return rows;
-    for (const child of node.children) rows.push(...renderFolder(child, depth + 1));
+    for (const child of node.children) rows.push(...renderFolder(child, depth + 1, keyPrefix));
     for (const s of node.sessions) rows.push(renderSession(s, depth + 1));
     if (node.children.length === 0 && node.sessions.length === 0) {
       rows.push(
-        <div key={`e:${node.id}`} style={{
+        <div key={`${keyPrefix}e:${node.id}`} style={{
           padding: `8px 12px 8px ${12 + (depth + 1) * INDENT_PX}px`,
           color: T.textMuted, fontSize: '0.74rem',
           borderBottom: `1px solid ${T.border}`,
@@ -517,8 +531,28 @@ export default function MobileSessionList({
       )}
 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        {rootFolders.flatMap(node => renderFolder(node, 0))}
-        {rootSessions.map(s => renderSession(s, 0))}
+        {ownerSections ? ownerSections.flatMap(sec => [
+          <div key={`o:${sec.owner}`} style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            padding: '8px 12px', background: T.bgCard,
+            borderBottom: `1px solid ${T.border}`,
+            color: sec.owner === UNOWNED_OWNER_KEY ? T.warning : T.textPrimary,
+            fontSize: '0.78rem', fontWeight: 700, fontFamily: T.fontSans,
+          }}>
+            <span aria-hidden="true">👤</span>
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {sec.owner === UNOWNED_OWNER_KEY ? '无主' : sec.owner === selfUsername ? `${sec.owner}（我）` : sec.owner}
+            </span>
+            <span style={{ fontSize: '0.68rem', fontWeight: 400, color: T.textMuted }}>{sec.count} 会话</span>
+          </div>,
+          ...sec.rootFolders.flatMap(node => renderFolder(node, 0, `${sec.owner}/`)),
+          ...sec.rootSessions.map(s => renderSession(s, 0)),
+        ]) : (
+          <>
+            {rootFolders.flatMap(node => renderFolder(node, 0))}
+            {rootSessions.map(s => renderSession(s, 0))}
+          </>
+        )}
         {sessions.length === 0 && rootFolders.length === 0 && (
           <div style={{ padding: '32px 16px', textAlign: 'center', color: T.textMuted, fontSize: '0.85rem' }}>
             这台开发机上没有运行中的会话，点右上角「＋ 新建」开一个

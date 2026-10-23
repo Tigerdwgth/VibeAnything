@@ -26,6 +26,7 @@ export default function NoticeStack({ notices, onDismiss }) {
         return (
           <div
             key={n.id}
+            className="va-slide-in-right"
             role="status"
             onClick={wholeBlockDismisses ? () => onDismiss(n.id) : undefined}
             title={wholeBlockDismisses ? '点一下关掉' : undefined}

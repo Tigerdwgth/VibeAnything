@@ -457,6 +457,30 @@ test('admin 看到全部文件夹，含空文件夹', () => {
   assert.deepStrictEqual(ids, ['f1', 'f2']);
 });
 
+test('admin 收到的文件夹带归属人（null = 无主），普通用户不带', () => {
+  const relay = new RelayServer();
+  fakeMachine(relay);
+  owners.setOwner('m1', 'a-sess', 'alice');
+  owners.setFolderOwner('m1', 'fa', 'alice');
+  relay.handleMachineMessage('m1', JSON.stringify({
+    type: 'active_sessions',
+    sessions: [{ sessionId: 'a-sess', folderId: 'fa' }],
+  }));
+  const admin = fakeBrowser(relay, ADMIN);
+  const alice = fakeBrowser(relay, ALICE);
+  admin.messages.length = 0;
+  alice.messages.length = 0;
+  relay.handleMachineMessage('m1', JSON.stringify({
+    type: 'folders',
+    folders: [{ id: 'fa', name: 'alice的', parentId: null }, { id: 'loose', name: '没人认领', parentId: null }],
+  }));
+  const adminFolders = admin.messages.find(m => m.type === 'folders').folders;
+  assert.deepStrictEqual(adminFolders.map(f => [f.id, f.owner]), [['fa', 'alice'], ['loose', null]]);
+  const aliceFolders = alice.messages.find(m => m.type === 'folders').folders;
+  assert.deepStrictEqual(aliceFolders.map(f => f.id), ['fa']);
+  assert.ok(!('owner' in aliceFolders[0]));
+});
+
 // ── 管理员「隐藏他人会话」（ownOnly 视图范围）────────────────
 
 /** 让 admin 浏览器进入隐藏模式，返回切换过程中收到的消息 */

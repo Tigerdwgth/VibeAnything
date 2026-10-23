@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { parseWsMessage } from './ws-message';
+
+// 尺寸停止变化多久之后才 fit + 通知 tmux（侧边栏宽度动画是 200ms，这里等它走完）
+const RESIZE_SETTLE_MS = 90;
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -18,7 +22,11 @@ import {
   attachUploadHandlers, fileToBase64, inferFileName, quotePath, DEFAULT_MAX_UPLOAD_MB,
 } from './terminal-upload';
 
-export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true, style }) {
+// memo：Dashboard 每次收到会话列表都会整体重渲染，终端面板的 props（会话标识、ws、可见性）
+// 那时并没有变，没必要把每个面板连同几十个按钮再渲染一遍
+export default memo(TerminalPanel);
+
+function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true, style }) {
   const containerRef = useRef(null);
   const termRef = useRef(null);
   const fitRef = useRef(null);
@@ -82,6 +90,15 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
     const currentWs = wsRef.current;
     if (currentWs?.readyState !== WebSocket.OPEN) return;
     currentWs.send(JSON.stringify({ type: 'release_size', machineId, sessionId }));
+  }
+
+  // 关 tab：退掉本连接的观众身份。最后一个观众走了 relay 才断 PTY，tmux 照常跑。
+  // 没开过（后台挂载从没显示过）就没有观众身份可退。
+  function closeViewer() {
+    const currentWs = wsRef.current;
+    if (!openedRef.current || currentWs?.readyState !== WebSocket.OPEN) return;
+    openedRef.current = false;
+    currentWs.send(JSON.stringify({ type: 'close_terminal', machineId, sessionId }));
   }
 
   function sendText(text) {
@@ -181,7 +198,9 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
       cursorBlink: true,
       fontSize: 14,
       fontFamily: '"JetBrains Mono", monospace',
-      scrollback: 10000,
+      // tmux 的内容在 alternate screen，xterm 自己的 scrollback 只存 attach 前的少量输出；
+      // 行数越大每个终端预留的缓冲越多，同类产品（VS Code/Tabby）默认都是 1000
+      scrollback: 2000,
       macOptionClickForcesSelection: true,
     });
     const fitAddon = new FitAddon();
@@ -301,13 +320,16 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
     };
 
     // resize：display:none / 尚未布局的容器 fit 出来的尺寸一律不发（见 measureSize）
-    let _resizeRaf = 0;
+    // 尺寸连续变化（侧边栏折叠的宽度动画、拖侧边栏边缘、拖窗口）时不逐帧 fit：
+    // 每次 fit 都会重排 xterm，每次发出去的 resize 都让 tmux 整屏重绘再推回一大段输出。
+    // 停下 RESIZE_SETTLE_MS 后只做一次（VS Code / Wave / Tabby 都是这么做的）。
+    let _resizeTimer = 0;
     let _lastCols = 0;
     let _lastRows = 0;
     const ro = new ResizeObserver(() => {
-      if (_resizeRaf) return;  // 已排队则跳过
-      _resizeRaf = requestAnimationFrame(() => {
-        _resizeRaf = 0;
+      clearTimeout(_resizeTimer);
+      _resizeTimer = setTimeout(() => {
+        _resizeTimer = 0;
         // 还没开过 PTY 就没有「本观众的尺寸」可言，不能拿它去参与协商压别人
         if (!openedRef.current) return;
         const size = measureSize();
@@ -317,7 +339,7 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
         _lastCols = size.cols;
         _lastRows = size.rows;
         sendResize(size);
-      });
+      }, RESIZE_SETTLE_MS);
     });
     if (containerRef.current) ro.observe(containerRef.current);
 
@@ -454,7 +476,7 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
     }
 
     return () => {
-      if (_resizeRaf) cancelAnimationFrame(_resizeRaf);
+      clearTimeout(_resizeTimer);
       ro.disconnect();
       disposeFontRefit();
       pointerHandle.dispose();
@@ -469,6 +491,12 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
         el.removeEventListener('touchend', onTapEnd);
         el.removeEventListener('click', onMouseClick);
       }
+      // 面板卸载 = 关掉这个 tab：退掉观众身份（否则 relay 一直推这个会话的输出直到重连），
+      // 再释放 xterm（不 dispose 的 Terminal 连同缓冲区和 DOM 都回收不掉）。
+      closeViewer();
+      term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
     };
   }, []);
 
@@ -480,7 +508,8 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
     const writer = createPtyWriteBatcher(() => termRef.current);
     function onMessage(e) {
       try {
-        const msg = JSON.parse(e.data);
+        const msg = parseWsMessage(e);
+        if (!msg) return;
         if (msg.type === 'pty_data' && msg.sessionId === sessionId && msg.data) {
           writer.push(decodePtyData(msg.data));
         }
@@ -558,7 +587,7 @@ export default function TerminalPanel({ machineId, sessionId, ws, command, cwd, 
     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)',
     color: '#8b949e', borderRadius: '4px', cursor: 'pointer',
     padding: '2px 10px', fontSize: '0.72rem', fontFamily: 'monospace',
-    transition: 'all 0.12s',
+    transition: 'background-color 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s, box-shadow 0.12s',
   };
 
   // 手机方向键按钮样式

@@ -107,13 +107,14 @@ export default function MachinesPanel({ token, onClose }) {
 
   return (
     <div
+      className="va-fade"
       onClick={e => e.target === e.currentTarget && onClose()}
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 80, padding: '16px',
       }}
     >
-      <div style={{
+      <div className="va-pop" style={{
         background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: T.radiusLg || '10px',
         width: 'min(720px, 100%)', maxHeight: '86vh', overflowY: 'auto', padding: '18px 20px',
         color: T.textPrimary, fontFamily: T.fontSans,

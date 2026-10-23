@@ -86,3 +86,91 @@ export function isDescendant(folders, childId, ancestorId) {
   }
   return false;
 }
+
+// ── 按归属人分组（管理员「全部会话」视图）──────────────────────
+// 服务端只对管理员给会话和文件夹带 owner 字段（null = 无主）。
+// 分组顺序：自己 → 其他人按用户名 → 无主。
+
+export const UNOWNED_OWNER_KEY = '__unowned__';
+
+const ownerKeyOf = (item) => item.owner || UNOWNED_OWNER_KEY;
+
+/**
+ * 一台机器上的会话和文件夹按归属人切开。
+ * 每人的文件夹 = 自己名下的 + 装着自己会话的 + 上面两类的祖先链，
+ * 这样别人建的文件夹里放着的会话仍挂在原来的路径下，不会被拍平到根。
+ * @returns Map<ownerKey, { folders, sessions }>，folders 保持原顺序
+ */
+export function partitionByOwner(folders, sessions) {
+  const safeFolders = Array.isArray(folders) ? folders : [];
+  const byId = new Map(safeFolders.map(f => [f.id, f]));
+  const seeds = new Map();   // ownerKey → Set<folderId>
+  const groups = new Map();  // ownerKey → sessions[]
+  const seedOf = (k) => { if (!seeds.has(k)) seeds.set(k, new Set()); return seeds.get(k); };
+
+  for (const s of (Array.isArray(sessions) ? sessions : [])) {
+    const k = ownerKeyOf(s);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+    if (s.folderId != null && byId.has(s.folderId)) seedOf(k).add(s.folderId);
+  }
+  for (const f of safeFolders) {
+    if ('owner' in f) seedOf(ownerKeyOf(f)).add(f.id);
+  }
+
+  const out = new Map();
+  for (const [k, ids] of seeds) {
+    const keep = new Set();
+    for (const id of ids) {
+      let cur = byId.get(id);
+      while (cur && !keep.has(cur.id)) {
+        keep.add(cur.id);
+        cur = cur.parentId != null ? byId.get(cur.parentId) : null;
+      }
+    }
+    out.set(k, { folders: safeFolders.filter(f => keep.has(f.id)), sessions: groups.get(k) || [] });
+  }
+  for (const [k, list] of groups) {
+    if (!out.has(k)) out.set(k, { folders: [], sessions: list });
+  }
+  return out;
+}
+
+/** 自己在前，其他人按用户名，无主垫底。 */
+export function sortOwnerKeys(keys, selfUsername) {
+  const rank = (k) => (k === selfUsername ? 0 : k === UNOWNED_OWNER_KEY ? 2 : 1);
+  return [...keys].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+/**
+ * 会话带了归属信息（管理员视图），且出现了自己以外的人或无主会话时才分组；
+ * 普通用户、或管理员只看到自己的会话时维持原来的按机器展示。
+ */
+export function shouldGroupByOwner(ownerKeys, sessions, selfUsername) {
+  if (!(Array.isArray(sessions) && sessions.some(s => 'owner' in s))) return false;
+  return [...ownerKeys].some(k => k !== selfUsername);
+}
+
+/**
+ * 运行中列表的两级分组：归属人 → 开发机。不需要分组时返回 null。
+ * @param activeSessions [{ machineId, owner, folderId, ... }]
+ * @param foldersByMachine { [machineId]: folders[] }
+ * @returns [{ owner: ownerKey, machines: [{ machineId, folders, sessions }] }] | null
+ */
+export function groupRunningByOwner(activeSessions, foldersByMachine, selfUsername) {
+  const byMachine = new Map();
+  for (const s of activeSessions) {
+    const mid = s.machineId || 'local';
+    if (!byMachine.has(mid)) byMachine.set(mid, []);
+    byMachine.get(mid).push(s);
+  }
+  const byOwner = new Map();   // ownerKey → machines[]
+  for (const [machineId, sessions] of byMachine) {
+    for (const [k, part] of partitionByOwner(foldersByMachine[machineId] || [], sessions)) {
+      if (!byOwner.has(k)) byOwner.set(k, []);
+      byOwner.get(k).push({ machineId, ...part });
+    }
+  }
+  if (!shouldGroupByOwner(byOwner.keys(), activeSessions, selfUsername)) return null;
+  return sortOwnerKeys(byOwner.keys(), selfUsername).map(owner => ({ owner, machines: byOwner.get(owner) }));
+}

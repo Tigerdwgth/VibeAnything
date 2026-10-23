@@ -1,0 +1,63 @@
+/* 全站共用的动效（桌面版与手机版入口都引入）。
+ * 原则：只动 transform / opacity —— 合成层完成，不触发排版，侧边栏里几百行也不掉帧；
+ * 只做进场动画，收起/关闭仍是即时的（退场动画要延迟卸载，换来的只是更慢的关闭）。 */
+
+:root {
+  --va-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --va-dur-fast: 120ms;
+  --va-dur: 180ms;
+}
+
+/* 连接状态点呼吸（桌面版与手机版共用；手机版之前引用了它却没定义） */
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* 侧边栏进场 */
+@keyframes slideIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+
+/* 分组展开：文件夹 / 开发机 / 用户分组的内容从上方轻轻落下 */
+@keyframes va-expand {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+.va-expand { animation: va-expand var(--va-dur) var(--va-ease-out); }
+
+/* 弹窗、右键菜单：轻微放大淡入 */
+@keyframes va-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.va-pop { animation: va-pop var(--va-dur) var(--va-ease-out); transform-origin: top center; }
+
+/* 遮罩淡入 */
+@keyframes va-fade { from { opacity: 0; } to { opacity: 1; } }
+.va-fade { animation: va-fade var(--va-dur) ease-out; }
+
+/* 手机底部面板从下边缘升起 */
+@keyframes va-sheet-up {
+  from { transform: translateY(100%); }
+  to   { transform: none; }
+}
+.va-sheet-up { animation: va-sheet-up 220ms var(--va-ease-out); }
+
+/* 通知条从右侧滑入 */
+@keyframes va-slide-in-right {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: none; }
+}
+.va-slide-in-right { animation: va-slide-in-right var(--va-dur) var(--va-ease-out); }
+
+/* 「已复制」之类的小提示（TerminalPanel 早就引用了这个名字，之前一直没定义） */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 系统设置了「减弱动态效果」：所有动画和过渡一律瞬间完成 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

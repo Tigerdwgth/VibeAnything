@@ -30,7 +30,7 @@ export default function MarkdownPreview({ path, content, onClose }) {
             background: T.bgCard, border: `1px solid ${T.border}`,
             color: T.textMuted, borderRadius: T.radiusSm,
             cursor: 'pointer', padding: '3px 10px', fontSize: '0.75rem',
-            fontFamily: T.fontSans, transition: 'all 0.15s',
+            fontFamily: T.fontSans, transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
           }}
         >
           关闭

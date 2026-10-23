@@ -151,7 +151,7 @@ export default function AddUser({ token, onClose }) {
                 border: `1px solid ${T.border}`,
                 borderRadius: T.radiusSm, cursor: 'pointer',
                 fontSize: '0.85rem', fontFamily: T.fontSans,
-                transition: 'all 0.15s',
+                transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
               }}
             >取消</button>
           </div>

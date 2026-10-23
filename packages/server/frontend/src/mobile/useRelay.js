@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mergeActiveSessions } from '../session-merge';
+import { parseWsMessage } from '../ws-message';
 import { loadHideOthers } from '../machine-prefs';
 import { playSound } from '../sound';
 
@@ -109,8 +110,8 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
         reconnectDelay = INITIAL_RECONNECT_DELAY;
       };
       socket.onmessage = (e) => {
-        let msg;
-        try { msg = JSON.parse(e.data); } catch { return; }
+        const msg = parseWsMessage(e);
+        if (!msg) return;
         handleMessage(msg);
       };
       socket.onerror = (e) => console.error('[mobile] WebSocket error:', e);

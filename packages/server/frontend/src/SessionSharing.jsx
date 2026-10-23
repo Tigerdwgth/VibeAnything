@@ -59,8 +59,8 @@ export default function SessionSharing({ token, session, onClose }) {
   const buttonStyle = { minHeight: 40, padding: '6px 12px', background: T.bgHover, color: T.textPrimary, border: `1px solid ${T.border}`, borderRadius: T.radiusSm, cursor: 'pointer' };
 
   return (
-    <div onClick={e => { if (e.target === e.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <div role="dialog" aria-modal="true" aria-labelledby="session-sharing-title" style={{ width: '100%', maxWidth: 420, maxHeight: '85dvh', overflowY: 'auto', padding: 20, background: T.bgCard, color: T.textPrimary, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, fontFamily: T.fontSans }}>
+    <div className="va-fade" onClick={e => { if (e.target === e.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div className="va-pop" role="dialog" aria-modal="true" aria-labelledby="session-sharing-title" style={{ width: '100%', maxWidth: 420, maxHeight: '85dvh', overflowY: 'auto', padding: 20, background: T.bgCard, color: T.textPrimary, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, fontFamily: T.fontSans }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <h2 id="session-sharing-title" style={{ fontSize: '1rem', margin: 0 }}>共享窗口</h2>
           <button ref={closeButton} type="button" aria-label="关闭共享设置" onClick={onClose} style={buttonStyle}>✕</button>

@@ -179,7 +179,7 @@ export default function UsagePanel({ token, isAdmin, selfUsername }) {
     color: activeFlag ? T.textPrimary : T.textMuted,
     borderRadius: T.radiusPill, cursor: 'pointer',
     padding: '3px 12px', fontSize: '0.72rem', fontWeight: 500,
-    fontFamily: T.fontSans, transition: 'all 0.15s',
+    fontFamily: T.fontSans, transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
   });
 
   return (

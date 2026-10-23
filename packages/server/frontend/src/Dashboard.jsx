@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import TerminalPanel from './TerminalPanel';
 import AddUser from './AddUser';
 import MachinesPanel from './MachinesPanel';
@@ -8,14 +8,11 @@ import useBuildWatch from './useBuildWatch';
 // 点小人打开会话时要拼启动命令（与侧栏点会话走同一套规则）
 import { getRunningSessionCommand } from './session-list-utils';
 import SessionTabs from './SessionTabs';
-import PixelView from './PixelView';
-import MarkdownPreview from './MarkdownPreview';
 import MachineSelector from './MachineSelector';
 import ChangePasswordModal from './ChangePasswordModal';
 import ProfileModal from './ProfileModal';
 import Avatar from './Avatar';
 import { displayNameOf } from './profile';
-import UsagePanel from './UsagePanel';
 import { useTheme } from './theme';
 import useResizable from './useResizable';
 import { playSound, isSoundEnabled, setSoundEnabled } from './sound';
@@ -23,6 +20,7 @@ import { createSessionId, getLaunchCommand } from './launch-config';
 import { FULL_VIEWPORT_HEIGHT } from './mobile-layout-config';
 import { resolveDefaultMachine, loadPreferredMachine, savePreferredMachine, loadHideOthers, saveHideOthers } from './machine-prefs';
 import { mergeActiveSessions } from './session-merge';
+import { parseWsMessage } from './ws-message';
 
 // 顶栏胶囊按钮：三处（隐藏他人会话 / 视图切换 / 并列）同款，只有选中态不同
 const pillStyle = (T, active) => ({
@@ -33,7 +31,7 @@ const pillStyle = (T, active) => ({
   cursor: 'pointer', padding: '3px 12px',
   fontSize: '0.72rem', fontWeight: 500,
   fontFamily: T.fontSans,
-  transition: 'all 0.15s',
+  transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
 });
 
 // 分屏工具条的四个方向。「新建」与「切换」两组共用同一份定义 ——
@@ -67,8 +65,19 @@ const splitBtnStyle = (T, enabled, { danger = false } = {}) => ({
   fontWeight: 500,
   fontFamily: T.fontSans,
   opacity: enabled ? 1 : 0.65,
-  transition: 'all 0.15s',
+  transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
 });
+
+// 只在切到对应视图时才用到的大块（像素引擎、markdown 解析、用量图表）按需加载，
+// 不进首屏包 —— 大多数时候只开终端，用不着它们
+const PixelView = lazy(() => import('./PixelView'));
+const MarkdownPreview = lazy(() => import('./MarkdownPreview'));
+const UsagePanel = lazy(() => import('./UsagePanel'));
+
+function LazyFallback() {
+  const T = useTheme();
+  return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.textMuted, fontSize: '0.8rem' }}>加载中…</div>;
+}
 
 export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewed, isDark, onToggleTheme }) {
   const T = useTheme();
@@ -206,8 +215,9 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
 
       ws.onmessage = (e) => {
         try {
-          const msg = JSON.parse(e.data);
-          console.log('[dashboard] ←', msg.type);
+          // 和各终端面板共用一次解析结果；pty_data 是热路径，这里没事可做直接返回
+          const msg = parseWsMessage(e);
+          if (!msg || msg.type === 'pty_data') return;
           if (msg.type === 'whoami')        { setIsAdmin(msg.role === 'admin'); setUsername(msg.username || ''); }
           if (msg.type === 'session_list')    setSessions(msg.sessions || []);
           if (msg.type === 'machine_list')    setOnlineMachines(msg.machines || []);
@@ -515,8 +525,6 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
         .sidebar-btn:hover { background: ${T.bgHover} !important; color: ${T.textPrimary} !important; }
         .view-pill:hover { background: ${T.bgHover} !important; }
         .topbar-btn:hover { background: ${T.bgHover} !important; }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-        @keyframes slideIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
         @media (max-width: 768px) {
           button, [role="button"], a { min-height: 44px; min-width: 44px; }
           /* 会话/历史列表里的小图标按钮（✕ 关闭 / ■ 停止 / 新建文件夹）不撑成 44px，
@@ -548,7 +556,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
 
         {/* 移动端遮罩层 */}
         {isMobile && mobileMenuOpen && (
-          <div onClick={() => setMobileMenuOpen(false)}
+          <div className="va-fade" onClick={() => setMobileMenuOpen(false)}
             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999 }} />
         )}
 
@@ -633,7 +641,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                 borderRadius: T.radiusSm, cursor: 'pointer',
                 color: T.textSecondary, fontFamily: T.fontSans,
                 justifyContent: sidebar.collapsed ? 'center' : 'flex-start',
-                transition: 'all 0.15s',
+                transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
               }}
             >
               <Avatar profile={profile || { username }} size={22} radius="50%" />
@@ -667,7 +675,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                 background: 'none', border: '1px solid transparent',
                 color: T.textMuted, borderRadius: T.radiusSm,
                 cursor: 'pointer', padding: '3px 6px', fontSize: '0.78rem',
-                transition: 'all 0.15s',
+                transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
               }}>🔑</button>
             <button
               className="sidebar-btn"
@@ -678,7 +686,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                 background: 'none', border: '1px solid transparent',
                 color: T.textMuted, borderRadius: T.radiusSm,
                 cursor: 'pointer', padding: '3px 6px', fontSize: '0.78rem',
-                transition: 'all 0.15s',
+                transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
               }}>👤</button>
             {/* 开发机台账 + 发装机邀请码。只有管理员能签发，所以按钮也只给管理员。 */}
             {isAdmin && (
@@ -691,7 +699,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                 background: 'none', border: '1px solid transparent',
                 color: T.textMuted, borderRadius: T.radiusSm,
                 cursor: 'pointer', padding: '3px 6px', fontSize: '0.78rem',
-                transition: 'all 0.15s',
+                transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
               }}>🖥</button>
             )}
             <button
@@ -703,7 +711,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                 background: 'none', border: '1px solid transparent',
                 color: T.textMuted, borderRadius: T.radiusSm,
                 cursor: 'pointer', padding: '3px 6px', fontSize: '0.72rem',
-                transition: 'all 0.15s',
+                transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
               }}>⏻</button>
           </div>
           )}
@@ -718,6 +726,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
               />
               <SessionTabs
                 token={token}
+                selfUsername={username}
                 sessions={filteredSessions}
                 activeSessions={activeSessions}
                 foldersByMachine={foldersByMachine}
@@ -885,7 +894,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                   cursor: 'pointer',
                   padding: isMobile ? '3px 8px' : '3px 10px',
                   fontSize: isMobile ? '0.72rem' : '0.85rem',
-                  transition: 'all 0.15s',
+                  transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
                   marginRight: '4px',
                   whiteSpace: 'nowrap',
                   flexShrink: 0,
@@ -905,7 +914,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                   cursor: 'pointer',
                   padding: isMobile ? '3px 8px' : '3px 10px',
                   fontSize: isMobile ? '0.72rem' : '0.85rem',
-                  transition: 'all 0.15s',
+                  transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
                   marginRight: '4px',
                   whiteSpace: 'nowrap',
                   flexShrink: 0,
@@ -933,7 +942,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                     fontWeight: 600, fontFamily: T.fontSans,
                     whiteSpace: 'nowrap', flexShrink: 0,
                     opacity: activeTerminal && wsReady ? 1 : 0.45,
-                    transition: 'all 0.15s',
+                    transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
                   }}
                 >
                   {label}
@@ -961,7 +970,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                     fontFamily: T.fontSans,
                     whiteSpace: 'nowrap',
                     flexShrink: 0,
-                    transition: 'all 0.15s',
+                    transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
                   }}
                 >
                   {label}
@@ -1010,6 +1019,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
             {/* 像素视图层 */}
             {viewMode === 'pixel' && (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <Suspense fallback={<LazyFallback />}>
                 <PixelView activeSessions={(() => {
                   // 合并 activeSessions（服务器扫描，权威）与 openTerminals（本浏览器打开的标签）。
                   // 去重必须带 machineId：两台机器上同名 tmux 是两个会话，按 sessionId 去重
@@ -1036,24 +1046,29 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                     notify('这个会话已经不在了', 'error');
                   }
                 }} onCloseSession={(machineId, sessionId) => closeTerminal(machineId, sessionId)} />
+                </Suspense>
               </div>
             )}
 
             {/* 用量层 */}
             {viewMode === 'usage' && (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <UsagePanel token={token} isAdmin={isAdmin} selfUsername={username} />
+                <Suspense fallback={<LazyFallback />}>
+                  <UsagePanel token={token} isAdmin={isAdmin} selfUsername={username} />
+                </Suspense>
               </div>
             )}
 
             {/* Markdown 预览层 */}
             {viewMode === 'markdown' && mdPreview && (
               <div style={{ position: 'absolute', inset: 0, background: T.bgBase, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <MarkdownPreview
-                  path={mdPreview.path}
-                  content={mdPreview.content}
-                  onClose={() => { setMdPreview(null); setViewMode('terminal'); }}
-                />
+                <Suspense fallback={<LazyFallback />}>
+                  <MarkdownPreview
+                    path={mdPreview.path}
+                    content={mdPreview.content}
+                    onClose={() => { setMdPreview(null); setViewMode('terminal'); }}
+                  />
+                </Suspense>
               </div>
             )}
           </div>

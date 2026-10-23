@@ -1,4 +1,5 @@
 import { StrictMode } from 'react'
+import '../motion.css'
 import { createRoot } from 'react-dom/client'
 import MobileApp from './MobileApp.jsx'
 import { installAppHeightSync } from '../app-height.js'

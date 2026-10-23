@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { parseWsMessage } from '../ws-message';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -35,7 +36,10 @@ const TAP_MAX_MOVE_PX = 10;    // 位移超过这个距离算滑动，不是点�
 const LONG_PRESS_MS = 500;     // 长按选中整行的阈值
 const SCROLL_DEAD_ZONE_PX = 2; // 小于这个位移不当滚动，留给点击判定
 
-export default function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
+// memo：会话列表一变 MobileShell 就整体重渲染，而终端面板的 props 那时并没有变
+export default memo(MobileTerminal);
+
+function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
   const containerRef = useRef(null);
   const termRef = useRef(null);
   const fitRef = useRef(null);
@@ -151,6 +155,14 @@ export default function MobileTerminal({ machineId, sessionId, ws, command, cwd,
     socket.send(JSON.stringify({ type: 'release_size', machineId, sessionId }));
   }
 
+  // 关标签：退掉观众身份，relay 不再推这个会话的输出（同桌面版 TerminalPanel）
+  function closeViewer() {
+    const socket = wsRef.current;
+    if (!openedRef.current || socket?.readyState !== WebSocket.OPEN) return;
+    openedRef.current = false;
+    socket.send(JSON.stringify({ type: 'close_terminal', machineId, sessionId }));
+  }
+
   // 粘贴/拖入/相册选出的文件 → 开发机落盘 → 回执里的路径由 onMessage 敲进终端。
   // 为什么不直接把字节塞进 PTY：claude 跑在开发机上，只能读它自己的本地路径
   // （完整来龙去脉见 terminal-upload.js 顶部）。
@@ -192,7 +204,8 @@ export default function MobileTerminal({ machineId, sessionId, ws, command, cwd,
       // 手机屏窄，13px 能多放几列；再小 tmux 状态栏会糊
       fontSize: 13,
       fontFamily: '"JetBrains Mono", monospace',
-      scrollback: 5000,
+      // 内容在 tmux 的 alternate screen，xterm 自己的 scrollback 只存少量启动输出（同桌面版）
+      scrollback: 2000,
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -401,6 +414,10 @@ export default function MobileTerminal({ machineId, sessionId, ws, command, cwd,
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
       el.removeEventListener('touchcancel', onTouchCancel);
+      closeViewer();
+      term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -412,8 +429,8 @@ export default function MobileTerminal({ machineId, sessionId, ws, command, cwd,
     const writer = createPtyWriteBatcher(() => termRef.current);
 
     function onMessage(e) {
-      let msg;
-      try { msg = JSON.parse(e.data); } catch { return; }
+      const msg = parseWsMessage(e);
+      if (!msg) return;
       if (msg.type === 'pty_data' && msg.sessionId === sessionId && msg.data) {
         writer.push(decodePtyData(msg.data));
       }

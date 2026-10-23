@@ -38,7 +38,7 @@ export default function ContextMenu({ x, y, items, onClose }) {
   };
 
   return (
-    <div onMouseDown={e => e.stopPropagation()} style={style}>
+    <div className="va-pop" onMouseDown={e => e.stopPropagation()} style={{ ...style, transformOrigin: 'top left' }}>
       {items.map((it, i) => it === null ? (
         <div key={`sep-${i}`} style={{ height: 1, background: T.border, margin: '4px 2px' }} />
       ) : (

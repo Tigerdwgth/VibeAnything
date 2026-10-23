@@ -289,10 +289,16 @@ class RelayServer {
     return out;
   }
 
-  /** 文件夹按登记的归属过滤，各人的分组树互不相见。 */
+  /**
+   * 文件夹按登记的归属过滤，各人的分组树互不相见。
+   * 管理员和会话一样带上 owner（null = 无主），前端据此按人分组显示。
+   */
   _filterFolders(browser, folders, machineId) {
-    if (browser?.user?.role === 'admin' && !browser.ownOnly) return folders || [];
-    return (folders || []).filter(f => this._canAccessFolder(browser, machineId, f.id));
+    const isAdmin = browser?.user?.role === 'admin';
+    const visible = isAdmin && !browser.ownOnly
+      ? (folders || [])
+      : (folders || []).filter(f => this._canAccessFolder(browser, machineId, f.id));
+    return isAdmin ? visible.map(f => ({ ...f, owner: owners.getFolderOwner(machineId, f.id) })) : visible;
   }
 
   // 越权时回一条 pty_error，便于前端提示与排障；不透露会话是否存在。

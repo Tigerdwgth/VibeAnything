@@ -170,6 +170,7 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
     : (activeTerminal ? activeTerminal.sessionId : 'VibeAnything');
 
   const sessionListProps = {
+    selfUsername: username,
     machines,
     selectedMachine,
     onSelectMachine: chooseMachine,

@@ -78,3 +78,60 @@ test('isDescendant 判定后代关系', () => {
   assert.equal(isDescendant(folders, 'a', 'c'), false);
   assert.equal(isDescendant(folders, 'a', 'a'), false);
 });
+
+// ── 按归属人分组 ──────────────────────────────────────────────
+import { partitionByOwner, sortOwnerKeys, shouldGroupByOwner, groupRunningByOwner, UNOWNED_OWNER_KEY } from '../src/folder-tree.js';
+
+test('partitionByOwner：各人只拿到自己的文件夹，别人文件夹里的会话带上祖先链', () => {
+  const folders = [
+    { id: 'pa', name: 'admin根', parentId: null, owner: 'admin' },
+    { id: 'pb', name: 'admin子', parentId: 'pa', owner: 'admin' },
+    { id: 'lf', name: 'carol的', parentId: null, owner: 'carol' },
+    { id: 'loose', name: '无主空', parentId: null, owner: null },
+  ];
+  const sessions = [
+    { sessionId: 'a1', owner: 'admin', folderId: 'pa' },
+    { sessionId: 'l1', owner: 'carol', folderId: 'lf' },
+    { sessionId: 'l2', owner: 'carol', folderId: 'pb' },   // 管理员把它挪进了自己的子文件夹
+    { sessionId: 'u1', owner: null, folderId: null },
+  ];
+  const parts = partitionByOwner(folders, sessions);
+  assert.deepEqual(parts.get('admin').folders.map(f => f.id), ['pa', 'pb']);
+  assert.deepEqual(parts.get('admin').sessions.map(s => s.sessionId), ['a1']);
+  assert.deepEqual(parts.get('carol').folders.map(f => f.id), ['pa', 'pb', 'lf']);
+  assert.deepEqual(parts.get('carol').sessions.map(s => s.sessionId), ['l1', 'l2']);
+  assert.deepEqual(parts.get(UNOWNED_OWNER_KEY).folders.map(f => f.id), ['loose']);
+  assert.deepEqual(parts.get(UNOWNED_OWNER_KEY).sessions.map(s => s.sessionId), ['u1']);
+});
+
+test('partitionByOwner：脏数据成环的祖先链不会死循环', () => {
+  const folders = [{ id: 'a', parentId: 'b' }, { id: 'b', parentId: 'a' }];
+  const parts = partitionByOwner(folders, [{ sessionId: 's', owner: 'x', folderId: 'a' }]);
+  assert.deepEqual(parts.get('x').folders.map(f => f.id).sort(), ['a', 'b']);
+});
+
+test('sortOwnerKeys：自己在前，其他人按名字，无主垫底', () => {
+  assert.deepEqual(
+    sortOwnerKeys([UNOWNED_OWNER_KEY, 'zed', 'admin', 'bob'], 'admin'),
+    ['admin', 'bob', 'zed', UNOWNED_OWNER_KEY],
+  );
+});
+
+test('shouldGroupByOwner：没有归属字段或只有自己时不分组', () => {
+  assert.equal(shouldGroupByOwner(['admin'], [{ sessionId: 's' }], 'admin'), false);
+  assert.equal(shouldGroupByOwner(['admin'], [{ sessionId: 's', owner: 'admin' }], 'admin'), false);
+  assert.equal(shouldGroupByOwner(['admin', 'carol'], [{ sessionId: 's', owner: 'carol' }], 'admin'), true);
+  assert.equal(shouldGroupByOwner([UNOWNED_OWNER_KEY], [{ sessionId: 's', owner: null }], 'admin'), true);
+});
+
+test('groupRunningByOwner：人 → 机器两级，同一个人跨机器聚在一组', () => {
+  const sessions = [
+    { machineId: 'm1', sessionId: 'a', owner: 'admin' },
+    { machineId: 'm1', sessionId: 'b', owner: 'carol' },
+    { machineId: 'm2', sessionId: 'c', owner: 'carol' },
+  ];
+  const groups = groupRunningByOwner(sessions, {}, 'admin');
+  assert.deepEqual(groups.map(g => g.owner), ['admin', 'carol']);
+  assert.deepEqual(groups[1].machines.map(m => [m.machineId, m.sessions.map(s => s.sessionId)]), [['m1', ['b']], ['m2', ['c']]]);
+  assert.equal(groupRunningByOwner(sessions.map(({ owner, ...s }) => s), {}, 'admin'), null);
+});

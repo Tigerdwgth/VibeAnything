@@ -3,7 +3,7 @@ import { DndContext, useDraggable, useDroppable, MouseSensor, TouchSensor, useSe
 import { useTheme } from './theme';
 import FileBrowser from './FileBrowser';
 import { DEFAULT_LAUNCH_COMMAND } from './launch-config';
-import { buildSessionTree, flattenFolderPaths, isDescendant } from './folder-tree';
+import { buildSessionTree, flattenFolderPaths, isDescendant, groupRunningByOwner, UNOWNED_OWNER_KEY } from './folder-tree';
 import useFolderCollapse from './useFolderCollapse';
 import ContextMenu from './ContextMenu';
 import SessionSharing from './SessionSharing';
@@ -36,7 +36,7 @@ const itemStyle = (T, selected) => ({
   background: selected ? T.accentDim : 'transparent',
   color: selected ? T.accent : T.textSecondary,
   borderLeft: `2px solid ${selected ? T.accent : 'transparent'}`,
-  transition: 'all 0.12s',
+  transition: 'background-color 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s, box-shadow 0.12s',
   display: 'flex', alignItems: 'center', gap: '6px',
 });
 
@@ -73,8 +73,9 @@ function EditableText({ value, onSubmit, onCancel, T }) {
 // 单个运行中会话项（可拖拽、右键菜单、inline 重命名），复用原两行 DOM 结构
 // isOpened：该会话是否已在浏览器中打开（sessionId 在 openTerminals 里）
 // onClose：关闭已打开的 Tab（只关 tab 不杀进程），仅对已打开会话显示 ✕
-function SessionItem({ session, machineId, depth, active, isOpened, onOpen, onStop, onClose, openMenu, editing, onRename, onCancelEdit, T }) {
-  const drag = useDraggable({ id: `s:${machineId}:${session.sessionId}`, data: { kind: 'session', machineId, id: session.sessionId } });
+// scope：按归属人分组时的组名（null = 不分组）。拖拽 id 带上它，跨组拖放据此拒绝。
+function SessionItem({ session, machineId, scope = null, depth, active, isOpened, onOpen, onStop, onClose, openMenu, editing, onRename, onCancelEdit, T }) {
+  const drag = useDraggable({ id: `s:${scope ?? ''}:${machineId}:${session.sessionId}`, data: { kind: 'session', machineId, scope, id: session.sessionId } });
   const selected = active?.sessionId === session.sessionId && active?.machineId === machineId;
   return (
     <div
@@ -123,8 +124,9 @@ function SessionItem({ session, machineId, depth, active, isOpened, onOpen, onSt
         )}
         {session.sharedBy && <span title={`由 ${session.sharedBy} 共享`} style={{ color: T.accent, fontSize: '0.62rem' }}>共享</span>}
         {/* 归属徽章：后端仅对 admin 下发 owner 字段。
-            owner 为 null = 无主会话（仅 admin 可见），标成「无主」提示需要转交。 */}
-        {'owner' in session && (
+            owner 为 null = 无主会话（仅 admin 可见），标成「无主」提示需要转交。
+            已按归属人分组时组标题就是归属，不再逐行重复。 */}
+        {scope == null && 'owner' in session && (
           <span
             title={session.owner ? `归属：${session.owner}` : '无主会话：仅管理员可见，建议转交给使用者'}
             style={{
@@ -164,9 +166,10 @@ function SessionItem({ session, machineId, depth, active, isOpened, onOpen, onSt
 
 // 递归文件夹节点：可拖拽（改父级）、可作为放置目标、折叠/展开、右键菜单、inline 重命名
 // openSessionIds：已打开会话的 sessionId 集合（Set），用于标记“已打开”状态并透传给 SessionItem
-function FolderNode({ node, machineId, depth, active, openSessionIds, collapse, callbacks, openMenu, editingKey, setEditingKey, T }) {
-  const drop = useDroppable({ id: `drop-f:${machineId}:${node.id}`, data: { machineId, folderId: node.id } });
-  const drag = useDraggable({ id: `f:${machineId}:${node.id}`, data: { kind: 'folder', machineId, id: node.id } });
+// 同一个文件夹可能作为祖先同时出现在几个人的分组里，dnd id 必须带 scope 才不撞
+function FolderNode({ node, machineId, scope = null, depth, active, openSessionIds, collapse, callbacks, openMenu, editingKey, setEditingKey, T }) {
+  const drop = useDroppable({ id: `drop-f:${scope ?? ''}:${machineId}:${node.id}`, data: { machineId, scope, folderId: node.id } });
+  const drag = useDraggable({ id: `f:${scope ?? ''}:${machineId}:${node.id}`, data: { kind: 'folder', machineId, scope, id: node.id } });
   const collapsed = collapse.isCollapsed(node.id);
   const editing = editingKey === `folder:${node.id}`;
   const count = node.sessions.length + node.children.length;
@@ -204,14 +207,14 @@ function FolderNode({ node, machineId, depth, active, openSessionIds, collapse, 
       {!collapsed && (
         // 文件夹内容区：左侧加一条竖线 + 左缩进，让「属于这个文件夹的东西」一眼可见层级。
         // 竖线缩进随 depth 递进对齐文件夹图标，子文件夹/会话自身 depth=0（缩进由这层容器提供）。
-        <div style={{
+        <div className="va-expand" style={{
           marginLeft: `${1.1 + depth * 0.85}rem`,
           borderLeft: `1px solid ${T.border}`,
           paddingLeft: '0.2rem',
         }}>
           {node.children.map(child => (
             <FolderNode
-              key={child.id} node={child} machineId={machineId} depth={0} active={active}
+              key={child.id} node={child} machineId={machineId} scope={scope} depth={0} active={active}
               openSessionIds={openSessionIds}
               collapse={collapse} callbacks={callbacks} openMenu={openMenu}
               editingKey={editingKey} setEditingKey={setEditingKey} T={T}
@@ -219,7 +222,7 @@ function FolderNode({ node, machineId, depth, active, openSessionIds, collapse, 
           ))}
           {node.sessions.map(s => (
             <SessionItem
-              key={s.sessionId} session={s} machineId={machineId} depth={0} active={active}
+              key={s.sessionId} session={s} machineId={machineId} scope={scope} depth={0} active={active}
               isOpened={openSessionIds.has(s.sessionId)}
               onOpen={callbacks.onOpen} onStop={callbacks.onStop} onClose={callbacks.onClose} openMenu={openMenu}
               editing={editingKey === `sess:${s.sessionId}`}
@@ -234,11 +237,12 @@ function FolderNode({ node, machineId, depth, active, openSessionIds, collapse, 
 }
 
 // 单台机器的运行中分组：文件夹树 + 根级会话 + 右键菜单
-function MachineRunningGroup({ machineId, sessions, folders, active, openSessionIds, callbacks }) {
+// allowCreateFolder：新建的文件夹归当前登录用户，放在别人的分组里建会「跑」到自己组，所以那里不给建
+function MachineRunningGroup({ machineId, scope = null, sessions, folders, active, openSessionIds, callbacks, allowCreateFolder = true }) {
   const T = useTheme();
   const collapse = useFolderCollapse(machineId);
   const contentId = useId();
-  const storageKey = `machineCollapsed:${machineId}`;
+  const storageKey = scope == null ? `machineCollapsed:${machineId}` : `machineCollapsed:${scope}:${machineId}`;
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem(storageKey) === 'true'; } catch { return false; }
   });
@@ -252,7 +256,7 @@ function MachineRunningGroup({ machineId, sessions, folders, active, openSession
   const [menu, setMenu] = useState(null);          // { x, y, target }
   const [editingKey, setEditingKey] = useState(null); // 'sess:<id>' | 'folder:<id>'
   const { rootFolders, rootSessions } = buildSessionTree(folders, sessions);
-  const rootDrop = useDroppable({ id: `drop-root:${machineId}`, data: { machineId, folderId: null }, disabled: collapsed });
+  const rootDrop = useDroppable({ id: `drop-root:${scope ?? ''}:${machineId}`, data: { machineId, scope, folderId: null }, disabled: collapsed });
 
   const openMenu = (e, target) => setMenu({ x: e.clientX, y: e.clientY, target });
 
@@ -262,7 +266,7 @@ function MachineRunningGroup({ machineId, sessions, folders, active, openSession
     if (target.type === 'folder') {
       return [
         { label: '✎ 重命名', onClick: () => setEditingKey(`folder:${target.node.id}`) },
-        { label: '＋ 新建子文件夹', onClick: () => callbacks.onCreateFolder(machineId, '新文件夹', target.node.id) },
+        ...(allowCreateFolder ? [{ label: '＋ 新建子文件夹', onClick: () => callbacks.onCreateFolder(machineId, '新文件夹', target.node.id) }] : []),
         null,
         { label: '🗑 删除文件夹', danger: true, onClick: () => {
           if (confirm('删除该文件夹？里面的会话和子文件夹会移到上一级')) callbacks.onDeleteFolder(machineId, target.node.id);
@@ -306,6 +310,7 @@ function MachineRunningGroup({ machineId, sessions, folders, active, openSession
           <span style={{ fontSize: '0.65rem', color: T.textMuted, flexShrink: 0 }}>{sessions.length} 会话</span>
           {runningCount > 0 && <span style={{ fontSize: '0.62rem', color: T.danger, flexShrink: 0 }}>{runningCount} 运行中</span>}
         </button>
+        {allowCreateFolder && (
         <button
           type="button"
           className="folder-add-btn"
@@ -314,12 +319,13 @@ function MachineRunningGroup({ machineId, sessions, folders, active, openSession
           aria-label={`在 ${machineId} 新建文件夹`}
           style={{ background: 'none', border: `1px solid ${T.border}`, color: T.textMuted, borderRadius: '4px', cursor: 'pointer', padding: '0 6px', minHeight: '34px', flexShrink: 0, fontSize: '0.68rem' }}
         >＋📁</button>
+        )}
       </div>
       <div id={contentId} hidden={collapsed}>
-        {!collapsed && <div ref={rootDrop.setNodeRef} style={{ background: rootDrop.isOver ? T.bgHover : 'transparent', borderRadius: T.radiusSm, paddingBottom: '2px', minHeight: '8px' }}>
+        {!collapsed && <div ref={rootDrop.setNodeRef} className="va-expand" style={{ background: rootDrop.isOver ? T.bgHover : 'transparent', borderRadius: T.radiusSm, paddingBottom: '2px', minHeight: '8px' }}>
           {rootFolders.map(node => (
             <FolderNode
-              key={node.id} node={node} machineId={machineId} depth={0} active={active}
+              key={node.id} node={node} machineId={machineId} scope={scope} depth={0} active={active}
               openSessionIds={openSessionIds}
               collapse={collapse} callbacks={callbacks} openMenu={openMenu}
               editingKey={editingKey} setEditingKey={setEditingKey} T={T}
@@ -327,7 +333,7 @@ function MachineRunningGroup({ machineId, sessions, folders, active, openSession
           ))}
           {rootSessions.map(s => (
             <SessionItem
-              key={s.sessionId} session={s} machineId={machineId} depth={0} active={active}
+              key={s.sessionId} session={s} machineId={machineId} scope={scope} depth={0} active={active}
               isOpened={openSessionIds.has(s.sessionId)}
               onOpen={callbacks.onOpen} onStop={callbacks.onStop} onClose={callbacks.onClose} openMenu={openMenu}
               editing={editingKey === `sess:${s.sessionId}`}
@@ -342,7 +348,64 @@ function MachineRunningGroup({ machineId, sessions, folders, active, openSession
   );
 }
 
-function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals = [], active, onOpen, onStop, onClose, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder }) {
+// 管理员看全部会话时的一级分组：一个归属人一组，组内再按开发机分
+function OwnerGroup({ owner, isSelf, machines, active, openSessionIds, callbacks }) {
+  const T = useTheme();
+  const contentId = useId();
+  const storageKey = `ownerCollapsed:${owner}`;
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem(storageKey) === 'true'; } catch { return false; }
+  });
+  const changeCollapsed = (next) => {
+    setCollapsed(next);
+    try { localStorage.setItem(storageKey, String(next)); } catch { /* 存储不可用仍可折叠 */ }
+  };
+  const unowned = owner === UNOWNED_OWNER_KEY;
+  const label = unowned ? '无主' : isSelf ? `${owner}（我）` : owner;
+  const all = machines.flatMap(m => m.sessions);
+  const runningCount = all.filter(s => s.isRunning).length;
+  const containsActive = machines.some(m => active?.machineId === m.machineId && m.sessions.some(s => s.sessionId === active.sessionId));
+
+  return (
+    <div style={{ marginBottom: '0.75rem' }}>
+      <button
+        type="button"
+        className="owner-toggle"
+        aria-label={`${collapsed ? '展开' : '收起'}用户 ${label}`}
+        aria-expanded={!collapsed}
+        aria-controls={contentId}
+        onClick={() => changeCollapsed(!collapsed)}
+        title={unowned ? '无主会话：仅管理员可见，建议转交给使用者' : `${owner} 的会话`}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
+          minHeight: '30px', padding: '4px 6px', marginBottom: '4px',
+          cursor: 'pointer', textAlign: 'left',
+          background: 'none', border: 'none', borderBottom: `1px solid ${T.border}`,
+          color: unowned ? T.warning : T.textPrimary, fontFamily: T.fontSans,
+        }}
+      >
+        <span aria-hidden="true" style={{ flexShrink: 0, transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform 0.12s' }}>▸</span>
+        <span aria-hidden="true" style={{ flexShrink: 0 }}>👤</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.78rem', fontWeight: 700 }}>{label}</span>
+        {collapsed && containsActive && <span title="当前会话在这组里" style={{ fontSize: '0.62rem', color: T.accent, flexShrink: 0 }}>当前</span>}
+        <span style={{ fontSize: '0.65rem', color: T.textMuted, flexShrink: 0 }}>{all.length} 会话</span>
+        {runningCount > 0 && <span style={{ fontSize: '0.62rem', color: T.danger, flexShrink: 0 }}>{runningCount} 运行中</span>}
+      </button>
+      <div id={contentId} hidden={collapsed} className="va-expand" style={{ paddingLeft: '0.5rem' }}>
+        {!collapsed && machines.map(m => (
+          <MachineRunningGroup
+            key={m.machineId} machineId={m.machineId} scope={owner}
+            sessions={m.sessions} folders={m.folders} active={active}
+            openSessionIds={openSessionIds} callbacks={callbacks}
+            allowCreateFolder={isSelf}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals = [], active, selfUsername, onOpen, onStop, onClose, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder }) {
   const T = useTheme();
   // 鼠标：移动 5px 即开拖（避免点击会话项 attach 终端被误判为拖拽）。
   // 触屏：长按 250ms 才开拖，之前划动超过 5px 取消拖拽还给
@@ -358,12 +421,15 @@ function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals =
     (acc[mid] = acc[mid] || []).push(s);
     return acc;
   }, {});
+  // 管理员看全部会话：先按人分组再按机器（不需要分组时为 null，见 groupRunningByOwner）
+  const ownerGroups = groupRunningByOwner(activeSessions, foldersByMachine, selfUsername);
 
   const handleDragEnd = (event) => {
     const { active: a, over } = event;
     if (!over) return;
     const ad = a.data.current, od = over.data.current;
     if (!ad || !od || ad.machineId !== od.machineId) return; // 跨机器禁止移动
+    if (ad.scope !== od.scope) return;                       // 跨归属人分组禁止移动
     const target = od.folderId; // null = 根
     if (ad.kind === 'session') {
       onMoveSession(ad.machineId, ad.id, target);
@@ -380,9 +446,15 @@ function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals =
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
-      <style>{`.machine-toggle:hover { border-color: ${T.accent} !important; } .machine-toggle:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; } .sess-item:hover { background: ${T.bgHover} !important; color: ${T.textPrimary} !important; }`}</style>
+      <style>{`.owner-toggle:hover { color: ${T.accent} !important; } .owner-toggle:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; } .machine-toggle:hover { border-color: ${T.accent} !important; } .machine-toggle:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; } .sess-item:hover { background: ${T.bgHover} !important; color: ${T.textPrimary} !important; }`}</style>
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        {Object.entries(byMachine).map(([machineId, sess]) => (
+        {ownerGroups ? ownerGroups.map(g => (
+          <OwnerGroup
+            key={g.owner} owner={g.owner} isSelf={g.owner === selfUsername}
+            machines={g.machines} active={active}
+            openSessionIds={openSessionIds} callbacks={callbacks}
+          />
+        )) : Object.entries(byMachine).map(([machineId, sess]) => (
           <MachineRunningGroup
             key={machineId} machineId={machineId} sessions={sess}
             folders={foldersByMachine[machineId] || []} active={active}
@@ -515,7 +587,7 @@ function HistoryTab({ historySessions, active, onOpen, onDelete }) {
                   border: `1px solid ${sel ? T.accent : T.border}`,
                   color: sel ? T.accent : T.textMuted,
                   cursor: 'pointer', fontSize: '0.68rem', fontWeight: sel ? 600 : 400,
-                  fontFamily: T.fontSans, transition: 'all 0.12s',
+                  fontFamily: T.fontSans, transition: 'background-color 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s, box-shadow 0.12s',
                   maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}
               >
@@ -548,7 +620,7 @@ function EmptyState({ text }) {
 }
 
 // ── 主组件 ────────────────────────────────────────────────────
-export default function SessionTabs({ token, sessions, activeSessions, foldersByMachine = {}, historySessions, openTerminals, active, onOpen, onClose, onDelete, onStop, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder, ws, machineId, machines, onLaunch, onPreviewMd, onSelectMachine }) {
+export default function SessionTabs({ token, selfUsername, sessions, activeSessions, foldersByMachine = {}, historySessions, openTerminals, active, onOpen, onClose, onDelete, onStop, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder, ws, machineId, machines, onLaunch, onPreviewMd, onSelectMachine }) {
   const T = useTheme();
   // 默认进「会话」Tab（原“运行中”，已合并“已打开”）
   const [tab, setTab] = useState('running');
@@ -581,7 +653,7 @@ export default function SessionTabs({ token, sessions, activeSessions, foldersBy
               borderRadius: T.radiusSm,
               color: tab === key ? T.textPrimary : T.textMuted,
               cursor: 'pointer', fontSize: '0.72rem', fontWeight: tab === key ? 600 : 400,
-              fontFamily: T.fontSans, transition: 'all 0.12s',
+              fontFamily: T.fontSans, transition: 'background-color 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s, box-shadow 0.12s',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
             }}
           >
@@ -599,7 +671,7 @@ export default function SessionTabs({ token, sessions, activeSessions, foldersBy
       </div>
 
       {sharingSession && <SessionSharing token={token} session={sharingSession} onClose={() => setSharingSession(null)} />}
-      {tab === 'running' && <RunningTab onShare={setSharingSession} activeSessions={activeSessions} foldersByMachine={foldersByMachine} openTerminals={openTerminals} active={active} onOpen={onOpen} onStop={onStop} onClose={onClose} onRenameSession={onRenameSession} onMoveSession={onMoveSession} onCreateFolder={onCreateFolder} onRenameFolder={onRenameFolder} onDeleteFolder={onDeleteFolder} onMoveFolder={onMoveFolder} />}
+      {tab === 'running' && <RunningTab onShare={setSharingSession} activeSessions={activeSessions} foldersByMachine={foldersByMachine} openTerminals={openTerminals} active={active} selfUsername={selfUsername} onOpen={onOpen} onStop={onStop} onClose={onClose} onRenameSession={onRenameSession} onMoveSession={onMoveSession} onCreateFolder={onCreateFolder} onRenameFolder={onRenameFolder} onDeleteFolder={onDeleteFolder} onMoveFolder={onMoveFolder} />}
       {tab === 'history' && <HistoryTab historySessions={historySessions} active={active} onOpen={onOpen} onDelete={onDelete} />}
       {tab === 'files'   && <FileBrowser ws={ws} machineId={machineId} machines={machines} historySessions={historySessions} onLaunch={onLaunch} onPreviewMd={onPreviewMd} onSelectMachine={onSelectMachine} />}
     </div>

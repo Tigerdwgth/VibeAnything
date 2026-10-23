@@ -17,6 +17,7 @@ function Shell({ title, subtitle, onClose, children }) {
   const T = useTheme();
   return (
     <div
+      className="va-fade"
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, zIndex: BACKDROP_Z,
@@ -26,6 +27,7 @@ function Shell({ title, subtitle, onClose, children }) {
     >
       {/* 面板自身吃掉点击，否则点在面板上会穿到遮罩的 onClose */}
       <div
+        className="va-sheet-up"
         onClick={e => e.stopPropagation()}
         style={{
           background: T.bgPanel,

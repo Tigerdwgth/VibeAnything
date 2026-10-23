@@ -50,12 +50,12 @@ export default function ChangePasswordModal({ onClose, onSuccess }) {
   }
 
   return (
-    <div style={{
+    <div className="va-fade" style={{
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
       background: 'rgba(0,0,0,0.5)', display: 'flex',
       alignItems: 'center', justifyContent: 'center', zIndex: 1000
     }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{
+      <div className="va-pop" onClick={e => e.stopPropagation()} style={{
         background: T.bgCard, border: `1px solid ${T.border}`,
         borderRadius: T.radiusLg, padding: '1.5rem',
         width: '100%', maxWidth: '400px',

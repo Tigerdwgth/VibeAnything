@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { parseWsMessage } from './ws-message';
 import { useTheme } from './theme';
 import { CLI_CMDS } from './launch-config';
 import { loadLastDir, saveLastDir } from './machine-prefs';
@@ -9,7 +10,7 @@ const iconBtn = (T, fontSize = '0.7rem') => ({
   background: 'none', border: `1px solid ${T.border}`,
   color: T.textMuted, borderRadius: '4px',
   cursor: 'pointer', padding: '1px 6px', fontSize,
-  flexShrink: 0, transition: 'all 0.12s',
+  flexShrink: 0, transition: 'background-color 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s, box-shadow 0.12s',
 });
 
 function LaunchMenu({ path, onLaunch, T }) {
@@ -76,12 +77,10 @@ function DirTree({ ws, machineId, rootPath, onLaunch, onPreviewMd, onNavigate })
   useEffect(() => {
     if (!ws || !machineId) return;
     const handler = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'dir_entries' && msg.path === rootPath) {
-          setEntries(msg.entries || []);
-        }
-      } catch {}
+      const msg = parseWsMessage(e);
+      if (msg?.type === 'dir_entries' && msg.path === rootPath) {
+        setEntries(msg.entries || []);
+      }
     };
     ws.addEventListener('message', handler);
     ws.send(JSON.stringify({ type: 'list_dir', machineId, path: rootPath }));
@@ -246,7 +245,7 @@ export default function FileBrowser({ ws, machineId, machines, historySessions, 
                   background: T.bgHover, border: `1px solid ${T.border}`,
                   color: T.textSecondary, borderRadius: T.radiusPill,
                   cursor: 'pointer', padding: '2px 8px', fontSize: '0.68rem',
-                  fontFamily: T.fontSans, transition: 'all 0.12s',
+                  fontFamily: T.fontSans, transition: 'background-color 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s, box-shadow 0.12s',
                   maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}
               >

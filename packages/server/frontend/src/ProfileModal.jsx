@@ -84,6 +84,7 @@ export default function ProfileModal({ token, profile, onClose, onSaved, fullscr
 
   return (
     <div
+      className="va-fade"
       onClick={(e) => e.target === e.currentTarget && !busy && onClose()}
       style={{
         position: 'fixed', inset: 0, zIndex: 1000,
@@ -93,6 +94,7 @@ export default function ProfileModal({ token, profile, onClose, onSaved, fullscr
       }}
     >
       <div
+        className="va-pop"
         onClick={(e) => e.stopPropagation()}
         style={{
           background: T.bgCard, border: `1px solid ${T.border}`,
@@ -123,7 +125,7 @@ export default function ProfileModal({ token, profile, onClose, onSaved, fullscr
               border: `1px dashed ${dragging ? T.accent : T.border}`,
               background: dragging ? T.accentDim : 'transparent',
               borderRadius: T.radiusMd, cursor: busy ? 'wait' : 'pointer',
-              transition: 'all 0.15s',
+              transition: 'background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s',
             }}
           >
             <Avatar profile={draft} size={88} radius="50%" style={{ border: `1px solid ${T.border}` }} />
