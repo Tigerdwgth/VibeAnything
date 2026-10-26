@@ -12,7 +12,7 @@ import { buildClickSequence, clientXYToCell } from './terminal-mouse-click';
 import { attachTerminalPointer } from './terminal-pointer';
 import { clipboardKeyAction, isMacPlatform } from './terminal-clipboard-keys';
 import { isTouchOnlyDevice } from './input-device';
-import { attachImeCursorSync } from './terminal-ime';
+import { attachImeCursorSync, attachImeCommitInput, isImeProcessKeydown } from './terminal-ime';
 import {
   encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit,
 } from './terminal-io';
@@ -229,6 +229,8 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
     //  · Windows / Linux 的 Ctrl+V 交给浏览器原生粘贴，文字和截图 / 文件都走 paste 事件。
     const isMac = isMacPlatform(navigator.platform);
     term.attachCustomKeyEventHandler((e) => {
+      // 输入法接管的按键交给 attachImeCommitInput（见 terminal-ime.js），不走 xterm 的定时比对
+      if (isImeProcessKeydown(e)) return false;
       const action = clipboardKeyAction(e, { isMac, hasSelection: term.hasSelection() });
       if (action === 'copy') {
         e.preventDefault();
@@ -462,6 +464,8 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
     // 光标不动，textarea 就一直停在 CSS 初值 left:-9999em，中文候选框被画到屏幕外，
     // 表现为「打拼音不跳输入法、切不了中英文」。这里在 focus / keydown 时补同步。
     const imeHandle = attachImeCursorSync(term, containerRef.current);
+    // 输入法直接上屏的字符（标点、Shift+符号）：等输入法真正写入时再发，见 terminal-ime.js
+    const imeCommitHandle = attachImeCommitInput(term, containerRef.current);
 
     // ── 粘贴图片 / 拖入文件 ──
     // 剪贴板里有文件才接管（纯文本仍走 xterm 原生粘贴）；文件传到开发机落盘后，
@@ -487,6 +491,7 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
       disposeFontRefit();
       pointerHandle.dispose();
       imeHandle.dispose();
+      imeCommitHandle.dispose();
       uploadHandle.dispose();
       if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
       if (el) {

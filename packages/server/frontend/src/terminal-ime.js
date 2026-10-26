@@ -78,3 +78,59 @@ export function attachImeCursorSync(term, container) {
     },
   };
 }
+
+// ── 输入法直接上屏的字符（豆包输入法 Shift+= 打不出 +）──
+//
+// 输入法开着时，按键的 keydown 是 keyCode 229（key='Process'）。不经候选框、直接上屏的字符
+// （中文标点、Shift+符号、英文模式下的字母）随后以一次 insertText 的 input 事件写进 textarea。
+// xterm 6.0.0 对这种按键的处理（CompositionHelper.keydown → _handleAnyTextareaChanges）是：
+// keydown 时记下 textarea 的值，**setTimeout(0)** 后比对差异发出去。字符写入晚于这个定时器
+// 就比对不出差异；而那次 input 事件到达时按键还没松开（_keyDownSeen 为真），
+// _inputEvent 也不处理 —— 两条路都错过，字符丢失。微软拼音写得快所以没事，豆包写得晚就丢。
+//
+// 解法：229 按键不再交给 xterm 的定时比对（自定义按键处理返回 false，见 isImeProcessKeydown），
+// 改为等输入法真正写入时的 input 事件，拿到什么发什么。监听挂在容器的 capture 阶段，
+// 早于 xterm 挂在 textarea 上的 input 处理，处理完 stopPropagation —— 同一个字只发一次，
+// 与输入法写入快慢、写在 keyup 之前还是之后都无关。
+// 候选框组合（打拼音选字）走 composition 事件，xterm 自己处理，这里不碰（isComposing 时跳过）。
+
+/** 输入法接管的按键（keydown 的 keyCode 229）。供 attachCustomKeyEventHandler 用：返回 true 时交给 attachImeCommitInput。 */
+export function isImeProcessKeydown(e) {
+  return e.type === 'keydown' && e.keyCode === 229;
+}
+
+/**
+ * 接上「输入法直接上屏」的输入通道。必须与自定义按键处理里的 isImeProcessKeydown 配套使用。
+ * @param {import('@xterm/xterm').Terminal} term
+ * @param {HTMLElement} container  term.open() 的宿主元素
+ * @returns {{ dispose: () => void }}
+ */
+export function attachImeCommitInput(term, container) {
+  if (!container) return { dispose() {} };
+  // 只认紧跟在 229 按键之后的那次写入；其它来源的 input（表情面板等）照旧交给 xterm
+  let pending = false;
+  const onKeyDown = (e) => { pending = e.keyCode === 229 && !e.isComposing; };
+  const onCompositionStart = () => { pending = false; };
+  const onInput = (e) => {
+    if (!pending || e.isComposing) return;
+    if (e.inputType === 'insertText' && e.data) {
+      pending = false;
+      e.stopPropagation();
+      term.input(e.data);
+    } else if (e.inputType === 'deleteContentBackward') {
+      pending = false;
+      e.stopPropagation();
+      term.input('\x7f');
+    }
+  };
+  container.addEventListener('keydown', onKeyDown, true);
+  container.addEventListener('compositionstart', onCompositionStart, true);
+  container.addEventListener('input', onInput, true);
+  return {
+    dispose() {
+      container.removeEventListener('keydown', onKeyDown, true);
+      container.removeEventListener('compositionstart', onCompositionStart, true);
+      container.removeEventListener('input', onInput, true);
+    },
+  };
+}

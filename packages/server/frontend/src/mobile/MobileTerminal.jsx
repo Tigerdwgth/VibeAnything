@@ -9,7 +9,7 @@ import {
 } from '../terminal-io';
 import { takeWheelSteps, buildWheelSequence, fingerDeltaToAccum } from '../terminal-touch-scroll';
 import { buildClickSequence, clientXYToCell } from '../terminal-mouse-click';
-import { attachImeCursorSync } from '../terminal-ime';
+import { attachImeCursorSync, attachImeCommitInput, isImeProcessKeydown } from '../terminal-ime';
 import { copyTextToClipboard } from '../clipboard';
 import { selectionAsCommand } from '../terminal-command-copy';
 import { sendSlashCommand } from '../slash-commands';
@@ -387,6 +387,9 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
 
     // 输入法定位：直连模式下打拼音时候选框必须画在光标处（见 terminal-ime.js）
     const imeHandle = attachImeCursorSync(term, containerRef.current);
+    // 输入法直接上屏的字符（标点、Shift+符号）：等输入法真正写入时再发，见 terminal-ime.js
+    term.attachCustomKeyEventHandler((e) => !isImeProcessKeydown(e));
+    const imeCommitHandle = attachImeCommitInput(term, containerRef.current);
 
     // 粘贴 / 拖入文件（手机上少用，但平板接键盘、或桌面浏览器打开 /m 时是有效入口）
     const uploadHandle = attachUploadHandlers(containerRef.current, {
@@ -408,6 +411,7 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
       ro.disconnect();
       disposeFontRefit();
       imeHandle.dispose();
+      imeCommitHandle.dispose();
       uploadHandle.dispose();
       if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
       el.removeEventListener('touchstart', onTouchStart);
