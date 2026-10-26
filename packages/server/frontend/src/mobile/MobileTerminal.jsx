@@ -422,7 +422,7 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── pty_data / 上传回执 ──
-  // 关键时序：先注册 listener 再发 open_terminal，否则机器端立刻回的历史快照会丢，
+  // 关键时序：先注册 listener 再发 open_terminal，否则 tmux 刚 attach 时发的终端初始化与整屏重绘会丢，
   // 终端只剩一个光标在闪。
   useEffect(() => {
     if (!ws) return undefined;

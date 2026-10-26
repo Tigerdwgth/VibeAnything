@@ -145,7 +145,7 @@ test('handles delete_session message', () => {
 test('pty_open 新建会话（isNew）后立即重发 active_sessions（Dashboard 启动按钮秒显）', () => {
   let sendCount = 0;
   const client = createClient({
-    create: () => ({ isNew: true, historySnapshot: null }),
+    create: () => ({ isNew: true }),
     write: () => {}, resize: () => {}, destroy: () => {},
   });
   client._send = () => {};
@@ -161,7 +161,7 @@ test('pty_open 新建会话（isNew）后立即重发 active_sessions（Dashboar
 test('pty_open attach 已有会话（!isNew）不额外重发 active_sessions', () => {
   let sendCount = 0;
   const client = createClient({
-    create: () => ({ isNew: false, historySnapshot: 'old screen' }),
+    create: () => ({ isNew: false }),
     write: () => {}, resize: () => {}, destroy: () => {},
   });
   client._send = () => {};

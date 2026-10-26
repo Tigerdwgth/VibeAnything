@@ -4,7 +4,7 @@ const { spawnSync } = require('node:child_process');
 const {
   PtyManager, buildSplitWindowArgs, buildSelectPaneArgs, buildKillPaneArgs,
   buildScrollToBottomArgs, buildLoginShellCommand,
-  tmuxName, tmuxPaneCount, captureBackfill, sanitizeTmuxName,
+  tmuxName, tmuxPaneCount, sanitizeTmuxName,
 } = require('../lib/pty-manager');
 
 const hasTmux = spawnSync('tmux', ['-V'], { stdio: 'ignore' }).status === 0;
@@ -59,17 +59,15 @@ test('renameTmuxSession 会话不存在返回错误', { skip: hasTmux ? false : 
   assert.strictEqual(r.ok, false);
 });
 
-test('分屏会话补屏跳过单 pane 快照（captureBackfill 返回空，交给 attach 重绘）', { skip: hasTmux ? false : 'tmux 不可用' }, () => {
+test('tmuxPaneCount 随分屏增减', { skip: hasTmux ? false : 'tmux 不可用' }, () => {
   const name = `vibe-split-${process.pid}`;
   spawnSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' });
   spawnSync('tmux', ['new-session', '-d', '-s', name, 'sleep 600'], { stdio: 'ignore' });
   try {
     assert.strictEqual(tmuxPaneCount(name), 1);
-    assert.notStrictEqual(captureBackfill(name), '', '单 pane 应有补屏文本');
     // 纵向分屏 → 2 个 pane
     spawnSync('tmux', ['split-window', '-v', '-t', name, 'sleep 600'], { stdio: 'ignore' });
     assert.strictEqual(tmuxPaneCount(name), 2);
-    assert.strictEqual(captureBackfill(name), '', '分屏应跳过单 pane 快照');
   } finally {
     spawnSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' });
   }
@@ -125,6 +123,54 @@ async function waitFor(fn, ms = 3000) {
   }
   return false;
 }
+
+// 半路加入的观众必须拿到 tmux 的终端初始化（进 alternate screen）。拿不到时 xterm 停在
+// 普通缓冲区，滚轮翻的是 xterm 自己的 scrollback，看到的是错行的内容而不是 tmux 的历史。
+test('第二个观众接入已开着的 PTY：换新 attach 客户端，两个观众都收到 alternate screen 初始化', { skip: hasTmux ? false : 'tmux 不可用' }, async () => {
+  const id = `vibe-join-${process.pid}`;
+  const name = `cc-${id}`;
+  const SMCUP = '\x1b[?1049h';
+  spawnSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' });
+  const mgr = new PtyManager();
+  const clients = () => spawnSync('tmux', ['list-clients', '-t', name, '-F', '#{client_pid}'], { encoding: 'utf8' })
+    .stdout.trim().split('\n').filter(Boolean);
+  let firstOut = '';
+  let secondOut = '';
+  let exits = 0;
+  try {
+    mgr.create(id, {
+      cols: 100, rows: 30, command: ['sleep', '600'],
+      onData: (d) => { firstOut += d; }, onExit: () => { exits++; },
+    });
+    assert.ok(await waitFor(() => firstOut.includes(SMCUP)), '首个观众没收到 attach 初始化');
+    const firstClients = clients();
+    assert.strictEqual(firstClients.length, 1);
+    firstOut = '';
+
+    // 同一个 tmux 窗口的别名接入（另一个浏览器 / 另一个 sessionId 指向同一窗口）
+    const r = mgr.create(name, { cols: 100, rows: 30, onData: (d) => { secondOut += d; } });
+    assert.strictEqual(r.isNew, false);
+    assert.ok(await waitFor(() => secondOut.includes(SMCUP)), '后加入的观众没收到 alternate screen 初始化');
+    assert.ok(firstOut.includes(SMCUP), '原观众也要拿到同一份重新初始化，两边画面一致');
+
+    // 旧客户端退场：tmux 上始终只有一个 dashboard 客户端，旧客户端的退出不能把 state 摘掉
+    assert.ok(await waitFor(() => {
+      const now = clients();
+      return now.length === 1 && now[0] !== firstClients[0];
+    }), `旧 attach 客户端没退出：${clients().join(',')}`);
+    await sleep(200);
+    assert.ok(mgr._sessions.has(id) && mgr._sessions.has(name), '旧客户端退出把共享的 state 摘掉了');
+    assert.strictEqual(exits, 0, '旧客户端退出不能当成会话断开通知出去');
+
+    // 新客户端仍然是活的输出通道
+    secondOut = '';
+    mgr.resize(id, 90, 30);              // 改尺寸逼 tmux 整屏重绘
+    assert.ok(await waitFor(() => secondOut.length > 0), '换客户端后收不到输出');
+  } finally {
+    mgr.destroyAll();
+    spawnSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' });
+  }
+});
 
 test('窗口高度扣掉 tmux 状态栏 —— 与 tmux 自己的计算一致', { skip: hasTmux ? false : 'tmux 不可用' }, async () => {
   const id = `vibe-status-${process.pid}`;
