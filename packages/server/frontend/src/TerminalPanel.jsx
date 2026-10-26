@@ -10,6 +10,7 @@ import { getLaunchCommand } from './launch-config';
 import { takeWheelSteps, buildWheelSequence, fingerDeltaToAccum } from './terminal-touch-scroll';
 import { buildClickSequence, clientXYToCell } from './terminal-mouse-click';
 import { attachTerminalPointer } from './terminal-pointer';
+import { clipboardKeyAction, isMacPlatform } from './terminal-clipboard-keys';
 import { attachImeCursorSync } from './terminal-ime';
 import {
   encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit,
@@ -220,18 +221,21 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
       xtermTextarea.setAttribute('readonly', '');
     }
 
-    // Ctrl+C 有选中文本时 = 复制到剪贴板（不发 SIGINT）
-    // 与 iTerm2 / VS Code Terminal 行为一致，防止用户以为复制成功但实际是发了 SIGINT
+    // 复制 / 粘贴快捷键（判定与来龙去脉见 terminal-clipboard-keys.js）：
+    //  · Ctrl+C / Ctrl+Shift+C 有选中文本时 = 复制（不发 SIGINT），与 iTerm2 / VS Code 一致；
+    //    preventDefault 挡住 Chrome 的 Ctrl+Shift+C（开发者工具的选取元素）。
+    //  · Windows / Linux 的 Ctrl+V 交给浏览器原生粘贴，文字和截图 / 文件都走 paste 事件。
+    const isMac = isMacPlatform(navigator.platform);
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type === 'keydown' && e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'c') {
-        const sel = term.getSelection();
-        if (sel) {
-          copyTextToClipboard(sel);
-          term.clearSelection();
-          return false; // 阻止 xterm 发送 \x03
-        }
+      const action = clipboardKeyAction(e, { isMac, hasSelection: term.hasSelection() });
+      if (action === 'copy') {
+        e.preventDefault();
+        copyTextToClipboard(term.getSelection());
+        term.clearSelection();
+        return false; // 阻止 xterm 发送 \x03
       }
-      return true; // 无选中时正常发送 SIGINT
+      if (action === 'paste') return false; // 不发 \x16，也不 preventDefault，浏览器照常粘贴
+      return true;
     });
 
     // 键盘输入 → ws
@@ -748,7 +752,7 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
             // HTTP（非 secure context）下浏览器不给网页读剪贴板，而且**存在也可能当场被拒**。
             // 两条路都要有出口：原来这里是 alert + 空 catch —— 弹窗阻塞整页，被拒时
             // 则一点反应没有（手机版 09-22 栽的就是「失败没出口」，见 LESSONS_LEARNED）。
-            const hint = '浏览器不让网页读剪贴板：点一下终端，直接按 Cmd+V / Ctrl+Shift+V';
+            const hint = '浏览器不让网页读剪贴板：点一下终端，直接按 Ctrl+V（Mac 用 Cmd+V）';
             if (!navigator.clipboard?.readText) { notifyUpload(hint, true); return; }
             navigator.clipboard.readText()
               .then(text => {

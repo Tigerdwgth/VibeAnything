@@ -186,7 +186,7 @@ describe('粘贴按钮在读不到剪贴板时要有出口', () => {
 
   const setClipboard = (value) => Object.defineProperty(navigator, 'clipboard', { value, configurable: true });
 
-  test('浏览器根本没有 clipboard API（HTTP 页面）→ 行内提示告诉用户改用 Cmd+V，不弹 alert', () => {
+  test('浏览器根本没有 clipboard API（HTTP 页面）→ 行内提示告诉用户改用 Ctrl+V / Cmd+V，不弹 alert', () => {
     const alerts = [];
     const realAlert = window.alert;
     window.alert = (m) => alerts.push(m);
@@ -195,7 +195,7 @@ describe('粘贴按钮在读不到剪贴板时要有出口', () => {
       mount();
       act(() => { byText('粘贴').dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
       expect(alerts).toEqual([]);
-      expect(host.textContent).toMatch(/Cmd\+V/);
+      expect(host.textContent).toMatch(/Ctrl\+V（Mac 用 Cmd\+V）/);
     } finally {
       window.alert = realAlert;
     }
