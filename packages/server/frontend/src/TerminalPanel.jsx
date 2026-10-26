@@ -11,6 +11,7 @@ import { takeWheelSteps, buildWheelSequence, fingerDeltaToAccum } from './termin
 import { buildClickSequence, clientXYToCell } from './terminal-mouse-click';
 import { attachTerminalPointer } from './terminal-pointer';
 import { clipboardKeyAction, isMacPlatform } from './terminal-clipboard-keys';
+import { isTouchOnlyDevice } from './input-device';
 import { attachImeCursorSync } from './terminal-ime';
 import {
   encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit,
@@ -213,8 +214,9 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
 
     // 手机端：禁止 xterm textarea 自动弹出键盘
     // xterm 内部有一个隐藏 textarea 用于接收键盘输入，在手机上 focus 时会弹出输入法
-    // 默认设为 inputMode="none"，用户可通过键盘按钮主动打开
-    const isMobileDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    // 默认设为 inputMode="none"，用户可通过键盘按钮主动打开。
+    // 只认手机/平板：触屏笔记本被压成 readonly 会丢掉所有输入法输入（见 input-device.js）
+    const isMobileDevice = isTouchOnlyDevice();
     const xtermTextarea = containerRef.current?.querySelector('textarea');
     if (isMobileDevice && xtermTextarea) {
       xtermTextarea.inputMode = 'none';
@@ -576,8 +578,7 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
         return;
       }
       // 手机端不自动 focus —— 防止弹出输入法
-      const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-      if (!isMobile) termRef.current?.focus();
+      if (!isTouchOnlyDevice()) termRef.current?.focus();
     };
     timer = setTimeout(settle, 100);
     // 切走（或卸载）时撤销尺寸声明：隐藏的面板量不到尺寸，留着旧值只会当天花板。
