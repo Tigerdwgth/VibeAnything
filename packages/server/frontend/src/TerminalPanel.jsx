@@ -521,7 +521,7 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
       try {
         const msg = parseWsMessage(e);
         if (!msg) return;
-        if (msg.type === 'pty_data' && msg.sessionId === sessionId && msg.data) {
+        if (msg.type === 'pty_data' && msg.machineId === machineId && msg.sessionId === sessionId && msg.data) {
           writer.push(decodePtyData(msg.data));
         }
         // 上传回执：路径敲进终端（尾随空格，方便接着打字）。

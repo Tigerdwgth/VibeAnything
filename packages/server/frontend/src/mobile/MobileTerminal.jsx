@@ -435,7 +435,7 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
     function onMessage(e) {
       const msg = parseWsMessage(e);
       if (!msg) return;
-      if (msg.type === 'pty_data' && msg.sessionId === sessionId && msg.data) {
+      if (msg.type === 'pty_data' && msg.machineId === machineId && msg.sessionId === sessionId && msg.data) {
         writer.push(decodePtyData(msg.data));
       }
       // 只认自己发起的 uploadId —— 同一会话的其它浏览器也会收到各自的回执

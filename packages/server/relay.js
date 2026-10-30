@@ -574,10 +574,14 @@ class RelayServer {
     if (msg.type === 'pty_data') {
       // 带 browserId = 定向回该浏览器（补屏快照），否则广播给所有观众。
       // 可见性判定统一在 _sendTo 的 VISIBILITY 里，两条路都要过。
+      // 开发机的原始 PTY 消息只有 sessionId；浏览器需要 machineId 区分不同机器的
+      // 同名 tmux 会话。补齐后只序列化一次，所有观众复用同一份字符串。
+      const routed = { ...msg, machineId };
+      const payload = JSON.stringify(routed);
       if (msg.browserId) {
-        this._sendTo(this.browsers.get(msg.browserId), { ...msg, machineId }, raw);
+        this._sendTo(this.browsers.get(msg.browserId), routed, payload);
       } else {
-        this._broadcast({ ...msg, machineId }, raw);
+        this._broadcast(routed, payload);
       }
       return;
     }

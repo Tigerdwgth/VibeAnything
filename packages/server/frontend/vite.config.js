@@ -9,12 +9,13 @@ export default defineConfig({
   plugins: [react()],
   build: {
     rollupOptions: {
-      // 两个独立入口：桌面版 index.html（/）与手机版 mobile.html（/m，路由见
-      // packages/server/index.js）。它们各自是一棵完整的 React 应用，只共用 src/ 下的
+      // 三个独立入口：桌面版（/）、手机版（/m）、多节点总览（/nodes），路由见
+      // packages/server/index.js。它们各自是一棵完整的 React 应用，只共用 src/ 下的
       // 模块；手机版不是给桌面版打的响应式补丁。
       input: {
         main: resolve(here, 'index.html'),
         mobile: resolve(here, 'mobile.html'),
+        nodes: resolve(here, 'nodes.html'),
       },
       output: {
         // 两个入口共用的那块（React / xterm / src 下的公共模块）会被拆成一个

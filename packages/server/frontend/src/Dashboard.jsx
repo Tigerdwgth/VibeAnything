@@ -625,6 +625,10 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
             </div>
             )}
 
+            <a href="/nodes" target="_blank" rel="noreferrer" title="多节点总览" style={{ display: 'block', marginTop: '0.6rem', color: T.accent, fontSize: '0.78rem', textDecoration: 'none' }}>
+              {sidebar.collapsed ? '◎' : '◎ 多节点总览 ↗'}
+            </a>
+
             {/* 当前用户：头像 + 昵称，点开改自己的个人信息。
                 profile 还没拉回来时用 whoami 给的用户名顶上，头像自然是默认那只兔子 ——
                 这一行不该出现「先空着、拉回来再冒出来」的跳变。 */}

@@ -896,7 +896,7 @@ test('未在策略表登记的浏览器消息一律丢弃（默认拒绝，不�
   assert.strictEqual(bob.messages.length, 0);
 });
 
-test('pty_data 原文转发，不重新序列化', () => {
+test('pty_data 带上来源机器，浏览器可以区分不同机器的同名会话', () => {
   const relay = new RelayServer();
   fakeMachine(relay);
   owners.setOwner('m1', 'a-sess', 'alice');
@@ -910,7 +910,7 @@ test('pty_data 原文转发，不重新序列化', () => {
   const raw = JSON.stringify({ type: 'pty_data', sessionId: 'a-sess', data: 'aGVsbG8=' });
   relay.handleMachineMessage('m1', raw);
 
-  assert.deepStrictEqual(alice.raw, [raw]);
+  assert.deepStrictEqual(alice.raw.map(JSON.parse), [{ type: 'pty_data', machineId: 'm1', sessionId: 'a-sess', data: 'aGVsbG8=' }]);
 });
 
 test('发往浏览器的数据只有 _sendTo 一个出口（漏过滤就是从分支里漏的）', () => {

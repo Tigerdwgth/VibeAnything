@@ -119,7 +119,7 @@ describe('输出链路', () => {
     mount();
     act(() => {
       ws.dispatchEvent(new window.MessageEvent('message', {
-        data: JSON.stringify({ type: 'pty_data', sessionId: 's-1', data: b64('mobile-pty-ok') }),
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 's-1', data: b64('mobile-pty-ok') }),
       }));
     });
     expect(await waitForText('mobile-pty-ok')).toBe(true);
@@ -129,7 +129,7 @@ describe('输出链路', () => {
     mount();
     act(() => {
       ws.dispatchEvent(new window.MessageEvent('message', {
-        data: JSON.stringify({ type: 'pty_data', sessionId: 'other', data: b64('NOT-MINE') }),
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 'other', data: b64('NOT-MINE') }),
       }));
     });
     // 这条要证的是「永远不出现」，所以不能轮询到出现为止：等满同样的时长再断言没有。
@@ -254,7 +254,7 @@ describe('复制', () => {
   async function feed(text) {
     act(() => {
       ws.dispatchEvent(new window.MessageEvent('message', {
-        data: JSON.stringify({ type: 'pty_data', sessionId: 's-1', data: b64(text) }),
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 's-1', data: b64(text) }),
       }));
     });
     const deadline = Date.now() + SETTLE_MS;
@@ -320,7 +320,7 @@ describe('复制命令', () => {
   async function feed(text, waitFor) {
     act(() => {
       ws.dispatchEvent(new window.MessageEvent('message', {
-        data: JSON.stringify({ type: 'pty_data', sessionId: 's-1', data: b64(text) }),
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 's-1', data: b64(text) }),
       }));
     });
     const deadline = Date.now() + 800;

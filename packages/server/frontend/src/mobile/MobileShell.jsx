@@ -238,6 +238,7 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
             animation: wsReady ? 'none' : 'pulse 1.5s infinite',
           }}
         />
+        <a href="/nodes" target="_blank" rel="noreferrer" title="多节点总览" aria-label="多节点总览" style={{ ...TOPBAR_BTN(T), textDecoration: 'none' }}>◎</a>
         <button type="button" onClick={onToggleTheme} title="切换主题" aria-label="切换主题" style={TOPBAR_BTN(T)}>
           {isDark ? '☀' : '🌙'}
         </button>

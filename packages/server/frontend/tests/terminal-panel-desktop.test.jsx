@@ -97,7 +97,7 @@ describe('桌面版终端的输出链路', () => {
     expect(host.querySelector('.xterm')).toBeTruthy();   // xterm 真的挂上来了
     act(() => {
       ws.dispatchEvent(new window.MessageEvent('message', {
-        data: JSON.stringify({ type: 'pty_data', sessionId: 's-1', data: b64('hello-from-pty') }),
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 's-1', data: b64('hello-from-pty') }),
       }));
     });
     // 写入是按帧合批的，等一帧再断言（这正是合批生效的证据）
@@ -105,11 +105,28 @@ describe('桌面版终端的输出链路', () => {
     expect(host.textContent).toContain('hello-from-pty');
   });
 
+  test('同名会话在另一台机器的输出不能混入当前终端', async () => {
+    mount();
+    act(() => {
+      for (const [machineId, text] of [['another-machine', 'WRONG-MACHINE'], ['macmini', 'CORRECT-MACHINE']]) {
+        ws.dispatchEvent(new window.MessageEvent('message', {
+          data: JSON.stringify({ type: 'pty_data', machineId, sessionId: 's-1', data: b64(text) }),
+        }));
+      }
+    });
+    const deadline = Date.now() + 2000;
+    while (!host.textContent.includes('CORRECT-MACHINE') && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    expect(host.textContent).toContain('CORRECT-MACHINE');
+    expect(host.textContent).not.toContain('WRONG-MACHINE');
+  });
+
   test('别的会话的 pty_data 不写进这个终端', async () => {
     mount();
     act(() => {
       ws.dispatchEvent(new window.MessageEvent('message', {
-        data: JSON.stringify({ type: 'pty_data', sessionId: 'other', data: b64('NOT-MINE') }),
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 'other', data: b64('NOT-MINE') }),
       }));
     });
     await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));

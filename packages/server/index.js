@@ -9,6 +9,7 @@ const { sessionIdOf, hasMachineToken } = require('./relay');
 const usage = require('./usage-store');
 
 const app = express();
+app.use(require('./node-cors').nodeCors());
 // 默认 100kb 装不下一次全量用量上报（几十天 × 多模型），放宽到 2mb。
 app.use(express.json({ limit: '2mb' }));
 
@@ -71,7 +72,7 @@ app.post('/api/register', async (req, res) => {
 });
 
 // 管理员创建用户
-app.post('/api/admin/users', authMiddleware, async (req, res) => {
+app.post('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
   if (password.length < 6) return res.status(400).json({ error: '密码至少6个字符' });
@@ -404,6 +405,11 @@ app.get(['/m', '/m/*'], (req, res) => {
   const fs = require('node:fs');
   if (fs.existsSync(mobile)) res.sendFile(mobile);
   else res.status(503).send('<h1>Mobile frontend not built yet. Run: cd packages/server/frontend && npm run build</h1>');
+});
+
+// 多节点总览可独立登录各节点，不依赖此入口服务器的账号。
+app.get(['/nodes', '/nodes/'], (req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend/dist/nodes.html'));
 });
 
 // SPA fallback

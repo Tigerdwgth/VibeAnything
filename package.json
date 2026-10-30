@@ -28,6 +28,7 @@
     "hooks/",
     "lib/",
     "packages/server/index.js",
+    "packages/server/node-cors.js",
     "packages/server/auth.js",
     "packages/server/relay.js",
     "packages/server/machine-tokens.js",
