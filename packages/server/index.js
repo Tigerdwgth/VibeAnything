@@ -9,7 +9,6 @@ const { sessionIdOf, hasMachineToken } = require('./relay');
 const usage = require('./usage-store');
 
 const app = express();
-app.use(require('./node-cors').nodeCors());
 // 默认 100kb 装不下一次全量用量上报（几十天 × 多模型），放宽到 2mb。
 app.use(express.json({ limit: '2mb' }));
 
@@ -405,11 +404,6 @@ app.get(['/m', '/m/*'], (req, res) => {
   const fs = require('node:fs');
   if (fs.existsSync(mobile)) res.sendFile(mobile);
   else res.status(503).send('<h1>Mobile frontend not built yet. Run: cd packages/server/frontend && npm run build</h1>');
-});
-
-// 多节点总览可独立登录各节点，不依赖此入口服务器的账号。
-app.get(['/nodes', '/nodes/'], (req, res) => {
-  res.sendFile(path.join(__dirname, 'frontend/dist/nodes.html'));
 });
 
 // SPA fallback

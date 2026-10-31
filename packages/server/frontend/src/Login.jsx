@@ -158,7 +158,6 @@ export default function Login({ onLogin, onRegister, isDark, onToggleTheme }) {
         </form>
 
         <p style={{ textAlign: 'center', marginTop: '1.25rem', fontSize: '0.8rem', color: T.textMuted }}>
-          <a href="/nodes" style={{ display: 'block', color: T.accent, marginBottom: '0.75rem' }}>打开多节点总览 ↗</a>
           没有账号？
           <span onClick={onRegister} style={{ color: T.accent, cursor: 'pointer', marginLeft: '4px', fontWeight: 500 }}>注册</span>
         </p>

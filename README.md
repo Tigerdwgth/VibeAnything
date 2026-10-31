@@ -29,12 +29,6 @@ cd vibeanything && node bin/cli.js
 | Python 格式化 | PostToolUse (Edit/Write) | 自动格式化 .py 文件 |
 | Commit 审查 | PreToolUse (Bash) | git commit 前检查代码风格 |
 
-### 多节点总览
-
-打开 `/nodes`，将多个独立 VibeAnything 节点汇总到同一个页面：逐节点登录、跨节点搜索、按用户分组、运行状态筛选，以及直接打开所属节点的终端。一个节点离线时，其他节点仍能继续使用。
-
-桌面、手机和登录页均有“多节点总览”入口。节点地址支持导入和导出，深浅色与手机布局均可用。跨站登录需在目标节点设置 `DASHBOARD_ORIGINS`；各节点需升级服务端与前端。部署方法、架构与每机自治方案见 [去中心化看板设计](docs/decentralized-dashboard.md)。
-
 ### Dashboard 会话管理
 
 - **会话列表（合并「已打开」与「运行中」）**：单一「会话」Tab 展示机器上所有活跃会话，已打开的会话高亮标记 + ✕ 关闭按钮。

@@ -81,20 +81,18 @@ describe('mobile.webmanifest', () => {
   });
 });
 
-describe('vite 多入口', () => {
+describe('vite 双入口', () => {
   const input = viteConfig.build.rollupOptions.input;
 
-  test('桌面版、手机版与多节点总览各自是一个入口', () => {
-    expect(Object.keys(input).sort()).toEqual(['main', 'mobile', 'nodes']);
+  test('桌面版与手机版各自是一个入口', () => {
+    expect(Object.keys(input).sort()).toEqual(['main', 'mobile']);
     expect(input.main).toMatch(/index\.html$/);
     expect(input.mobile).toMatch(/mobile\.html$/);
-    expect(input.nodes).toMatch(/nodes\.html$/);
   });
 
-  test('各个入口指向的 html 都真实存在', () => {
+  test('两个入口指向的 html 都真实存在', () => {
     expect(() => readFileSync(input.main, 'utf8')).not.toThrow();
     expect(() => readFileSync(input.mobile, 'utf8')).not.toThrow();
-    expect(() => readFileSync(input.nodes, 'utf8')).not.toThrow();
   });
 
   test('共用 chunk 有个说得清的名字（排查线上产物时不至于被误导）', () => {
