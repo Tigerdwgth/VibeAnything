@@ -6,6 +6,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import MobileSessionList from '../src/mobile/MobileSessionList.jsx';
+import { sessionKey } from '../src/session-key.js';
 import { DARK } from '../src/theme.js';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,8 +31,8 @@ function render(overrides = {}) {
     selectedMachine: 'macmini',
     onSelectMachine: (m) => calls.push(['machine', m]),
     sessions: SESSIONS,
-    openSessionIds: new Set(['my-shell']),
-    activeSessionId: 'my-shell',
+    openSessionKeys: new Set([sessionKey('macmini', 'my-shell')]),
+    activeSessionKey: sessionKey('macmini', 'my-shell'),
     onOpen: (...a) => calls.push(['open', ...a]),
     onCloseTab: (...a) => calls.push(['close', ...a]),
     onStop: (...a) => calls.push(['stop', ...a]),
@@ -222,7 +223,7 @@ describe('新建会话', () => {
 
 describe('空列表', () => {
   test('没有会话时给的是下一步动作，不是一片空白', () => {
-    render({ sessions: [], openSessionIds: new Set(), activeSessionId: null });
+    render({ sessions: [], openSessionKeys: new Set(), activeSessionKey: null });
     expect(host.textContent).toContain('没有运行中的会话');
     expect(host.textContent).toContain('＋ 新建');
   });

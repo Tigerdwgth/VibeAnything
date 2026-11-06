@@ -151,6 +151,24 @@ describe('中文输入法（Android 的回车竞态）', () => {
     expect(sent).toEqual(['继续', '\r', '\r']);
   });
 
+  // Mac Chrome / iOS 不会补发那次 Enter。旧实现「吞下一次 Enter」的标记会一直挂着，
+  // 把用户下一条消息的真回车吃掉（2026-11-06 复现）。补发只会紧跟着到，过了时间窗照常发。
+  test('没有补发 Enter 的平台：下一条消息的回车照常发出', async () => {
+    const { input } = render();
+    composition(input, 'compositionstart');
+    input.value = '你好';
+    key(input, 'Enter', { isComposing: true });
+    composition(input, 'compositionend', '你好');
+    expect(sent).toEqual(['你好', '\r']);
+
+    await act(async () => { await new Promise(r => setTimeout(r, 350)); });
+    input.value = 'ls';
+    const ev = key(input, 'Enter');
+    expect(ev.defaultPrevented).toBe(true);
+    expect(sent).toEqual(['你好', '\r', 'ls', '\r']);
+    expect(input.value).toBe('');
+  });
+
   test('没按回车的普通中文输入不会自己发出去', () => {
     const { input } = render();
     composition(input, 'compositionstart');
@@ -181,11 +199,46 @@ describe('空框时工具键透传给终端', () => {
     });
   }
 
-  test('Ctrl+字母 → 对应控制字符（Ctrl+C = \\x03）', () => {
+  // 非 Mac 上 Ctrl+V 是浏览器粘贴。往框里第一次粘贴时框必然是空的，
+  // 从前这一下被当成 ^V 发给了终端、原生粘贴也被拦掉（2026-11-06 复现）。
+  describe('空框时浏览器编辑快捷键', () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(window.navigator, 'platform');
+    const setPlatform = (value) => Object.defineProperty(window.navigator, 'platform', { value, configurable: true });
+    afterEach(() => {
+      if (realPlatform) Object.defineProperty(window.navigator, 'platform', realPlatform);
+      else delete window.navigator.platform;
+    });
+
+    test('Windows / Linux：Ctrl+V 留给浏览器粘贴，不发 ^V', () => {
+      setPlatform('Win32');
+      const { input } = render();
+      const ev = key(input, 'v', { ctrlKey: true });
+      expect(sent).toEqual([]);
+      expect(ev.defaultPrevented).toBe(false);
+    });
+
+    test('Windows / Linux：空框 Ctrl+C 仍是打断，Ctrl+A 仍是行首', () => {
+      setPlatform('Win32');
+      const { input } = render();
+      const evs = ['c', 'a'].map(k => key(input, k, { ctrlKey: true }));
+      expect(sent).toEqual(['\x03', '\x01']);
+      expect(evs.every(ev => ev.defaultPrevented)).toBe(true);
+    });
+
+    test('Mac：粘贴是 Cmd+V，Ctrl+C 照旧是打断', () => {
+      setPlatform('MacIntel');
+      const { input } = render();
+      const ev = key(input, 'c', { ctrlKey: true });
+      expect(sent).toEqual(['\x03']);
+      expect(ev.defaultPrevented).toBe(true);
+    });
+  });
+
+  test('Ctrl+字母 → 对应控制字符（Ctrl+D = \\x04）', () => {
     const { input } = render();
-    key(input, 'c', { ctrlKey: true });
     key(input, 'd', { ctrlKey: true });
-    expect(sent).toEqual(['\x03', '\x04']);
+    key(input, 'l', { ctrlKey: true });
+    expect(sent).toEqual(['\x04', '\x0c']);
   });
 });
 

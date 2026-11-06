@@ -25,3 +25,17 @@ export function mergeActiveSessions(prev, incoming, machineId) {
   );
   return [...otherMachines, ...serverSessions, ...optimistic];
 }
+
+/**
+ * 按 machine_list 剔除已离线机器的会话。
+ * 开发机下线时 relay 只重推 machine_list，不会再为它发一条空的 active_sessions ——
+ * 只靠 mergeActiveSessions 的话，它的会话会一直挂在列表里，点开就是对离线机器发 open_terminal。
+ * @param {object[]} list     现有会话列表
+ * @param {object[]} machines machine_list 里的在线机器 [{ machineId }]
+ * @returns {object[]} 没有可剔除的就原样返回（不触发重渲染）
+ */
+export function dropOfflineMachines(list, machines) {
+  const online = new Set((machines || []).map(m => m.machineId));
+  const kept = (list || []).filter(s => online.has(s.machineId));
+  return kept.length === (list || []).length ? list : kept;
+}

@@ -17,6 +17,7 @@ import {
 } from './session-list-utils';
 // 机器名显示用短名、完整名放 title（共用模块，开发机面板/机器下拉同一份）
 import { shortMachineId } from './machine-name';
+import { sessionKey, isSameSession } from './session-key';
 
 function timeAgo(ts) {
   if (!ts) return '';
@@ -72,7 +73,7 @@ function EditableText({ value, onSubmit, onCancel, T }) {
 }
 
 // 单个运行中会话项（可拖拽、右键菜单、inline 重命名），复用原两行 DOM 结构
-// isOpened：该会话是否已在浏览器中打开（sessionId 在 openTerminals 里）
+// isOpened：该会话是否已在浏览器中打开（machineId + sessionId 在 openTerminals 里）
 // onClose：关闭已打开的 Tab（只关 tab 不杀进程），仅对已打开会话显示 ✕
 // scope：按归属人分组时的组名（null = 不分组）。拖拽 id 带上它，跨组拖放据此拒绝。
 function SessionItem({ session, machineId, scope = null, depth, active, isOpened, onOpen, onStop, onClose, openMenu, editing, onRename, onCancelEdit, T }) {
@@ -161,9 +162,9 @@ function SessionItem({ session, machineId, scope = null, depth, active, isOpened
 }
 
 // 递归文件夹节点：可拖拽（改父级）、可作为放置目标、折叠/展开、右键菜单、inline 重命名
-// openSessionIds：已打开会话的 sessionId 集合（Set），用于标记“已打开”状态并透传给 SessionItem
+// openSessionKeys：已打开会话的 sessionKey 集合（Set，见 session-key.js），用于标记“已打开”状态并透传给 SessionItem
 // 同一个文件夹可能作为祖先同时出现在几个人的分组里，dnd id 必须带 scope 才不撞
-function FolderNode({ node, machineId, scope = null, depth, active, openSessionIds, collapse, callbacks, openMenu, editingKey, setEditingKey, T }) {
+function FolderNode({ node, machineId, scope = null, depth, active, openSessionKeys, collapse, callbacks, openMenu, editingKey, setEditingKey, T }) {
   const drop = useDroppable({ id: `drop-f:${scope ?? ''}:${machineId}:${node.id}`, data: { machineId, scope, folderId: node.id } });
   const drag = useDraggable({ id: `f:${scope ?? ''}:${machineId}:${node.id}`, data: { kind: 'folder', machineId, scope, id: node.id } });
   const collapsed = collapse.isCollapsed(node.id);
@@ -211,7 +212,7 @@ function FolderNode({ node, machineId, scope = null, depth, active, openSessionI
           {node.children.map(child => (
             <FolderNode
               key={child.id} node={child} machineId={machineId} scope={scope} depth={0} active={active}
-              openSessionIds={openSessionIds}
+              openSessionKeys={openSessionKeys}
               collapse={collapse} callbacks={callbacks} openMenu={openMenu}
               editingKey={editingKey} setEditingKey={setEditingKey} T={T}
             />
@@ -219,7 +220,7 @@ function FolderNode({ node, machineId, scope = null, depth, active, openSessionI
           {node.sessions.map(s => (
             <SessionItem
               key={s.sessionId} session={s} machineId={machineId} scope={scope} depth={0} active={active}
-              isOpened={openSessionIds.has(s.sessionId)}
+              isOpened={openSessionKeys.has(sessionKey(machineId, s.sessionId))}
               onOpen={callbacks.onOpen} onStop={callbacks.onStop} onClose={callbacks.onClose} openMenu={openMenu}
               editing={editingKey === `sess:${s.sessionId}`}
               onRename={(v) => { callbacks.onRenameSession(machineId, s.sessionId, v); setEditingKey(null); }}
@@ -234,7 +235,7 @@ function FolderNode({ node, machineId, scope = null, depth, active, openSessionI
 
 // 单台机器的运行中分组：文件夹树 + 根级会话 + 右键菜单
 // allowCreateFolder：新建的文件夹归当前登录用户，放在别人的分组里建会「跑」到自己组，所以那里不给建
-function MachineRunningGroup({ machineId, scope = null, sessions, folders, active, openSessionIds, callbacks, allowCreateFolder = true }) {
+function MachineRunningGroup({ machineId, scope = null, sessions, folders, active, openSessionKeys, callbacks, allowCreateFolder = true }) {
   const T = useTheme();
   const collapse = useFolderCollapse(machineId);
   const contentId = useId();
@@ -322,7 +323,7 @@ function MachineRunningGroup({ machineId, scope = null, sessions, folders, activ
           {rootFolders.map(node => (
             <FolderNode
               key={node.id} node={node} machineId={machineId} scope={scope} depth={0} active={active}
-              openSessionIds={openSessionIds}
+              openSessionKeys={openSessionKeys}
               collapse={collapse} callbacks={callbacks} openMenu={openMenu}
               editingKey={editingKey} setEditingKey={setEditingKey} T={T}
             />
@@ -330,7 +331,7 @@ function MachineRunningGroup({ machineId, scope = null, sessions, folders, activ
           {rootSessions.map(s => (
             <SessionItem
               key={s.sessionId} session={s} machineId={machineId} scope={scope} depth={0} active={active}
-              isOpened={openSessionIds.has(s.sessionId)}
+              isOpened={openSessionKeys.has(sessionKey(machineId, s.sessionId))}
               onOpen={callbacks.onOpen} onStop={callbacks.onStop} onClose={callbacks.onClose} openMenu={openMenu}
               editing={editingKey === `sess:${s.sessionId}`}
               onRename={(v) => { callbacks.onRenameSession(machineId, s.sessionId, v); setEditingKey(null); }}
@@ -345,7 +346,7 @@ function MachineRunningGroup({ machineId, scope = null, sessions, folders, activ
 }
 
 // 管理员看全部会话时的一级分组：一个归属人一组，组内再按开发机分
-function OwnerGroup({ owner, isSelf, machines, active, openSessionIds, callbacks }) {
+function OwnerGroup({ owner, isSelf, machines, active, openSessionKeys, callbacks }) {
   const T = useTheme();
   const contentId = useId();
   const storageKey = `ownerCollapsed:${owner}`;
@@ -392,7 +393,7 @@ function OwnerGroup({ owner, isSelf, machines, active, openSessionIds, callbacks
           <MachineRunningGroup
             key={m.machineId} machineId={m.machineId} scope={owner}
             sessions={m.sessions} folders={m.folders} active={active}
-            openSessionIds={openSessionIds} callbacks={callbacks}
+            openSessionKeys={openSessionKeys} callbacks={callbacks}
             allowCreateFolder={isSelf}
           />
         ))}
@@ -410,8 +411,9 @@ function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals =
     useSensor(MouseSensor, { activationConstraint: MOUSE_DRAG_ACTIVATION }),
     useSensor(TouchSensor, { activationConstraint: TOUCH_DRAG_ACTIVATION }),
   );
-  // 已打开会话的 sessionId 集合：来自浏览器 openTerminals，用于在会话列表里标记“已打开”
-  const openSessionIds = new Set(openTerminals.map(t => t.sessionId));
+  // 已打开会话的集合：来自浏览器 openTerminals，用于在会话列表里标记“已打开”。
+  // 键带 machineId：两台机器上同名 tmux 会话不能互相标成已打开（见 session-key.js）
+  const openSessionKeys = new Set(openTerminals.map(t => sessionKey(t.machineId, t.sessionId)));
   const byMachine = activeSessions.reduce((acc, s) => {
     const mid = s.machineId || 'local';
     (acc[mid] = acc[mid] || []).push(s);
@@ -448,13 +450,13 @@ function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals =
           <OwnerGroup
             key={g.owner} owner={g.owner} isSelf={g.owner === selfUsername}
             machines={g.machines} active={active}
-            openSessionIds={openSessionIds} callbacks={callbacks}
+            openSessionKeys={openSessionKeys} callbacks={callbacks}
           />
         )) : Object.entries(byMachine).map(([machineId, sess]) => (
           <MachineRunningGroup
             key={machineId} machineId={machineId} sessions={sess}
             folders={foldersByMachine[machineId] || []} active={active}
-            openSessionIds={openSessionIds} callbacks={callbacks}
+            openSessionKeys={openSessionKeys} callbacks={callbacks}
           />
         ))}
       </DndContext>
@@ -464,7 +466,7 @@ function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals =
 }
 
 // ── 历史 Tab ──────────────────────────────────────────────────
-function HistoryTab({ historySessions, active, onOpen, onDelete }) {
+function HistoryTab({ historySessions, active, onOpen, onLaunch, onDelete }) {
   const T = useTheme();
   const [hovered, setHovered] = useState(null);
   // 选中的机器：只显示这台的历史，避免所有机器堆一起要往下翻。null = 还没选/默认第一台
@@ -487,7 +489,7 @@ function HistoryTab({ historySessions, active, onOpen, onDelete }) {
       onMouseEnter={() => setHovered(s.sessionId)}
       onMouseLeave={() => setHovered(null)}
       style={{
-        ...itemStyle(T, active?.sessionId === s.sessionId),
+        ...itemStyle(T, isSameSession(active, s.machineId || 'local', s.sessionId)),
         flexDirection: 'column', alignItems: 'stretch', gap: '2px',
         padding: '0.4rem 0.6rem',
       }}
@@ -519,7 +521,10 @@ function HistoryTab({ historySessions, active, onOpen, onDelete }) {
           <button
             className="hist-btn"
             title="在此目录启动 codex"
-            onClick={e => { e.stopPropagation(); onOpen(s.machineId || 'local', s.sessionId, DEFAULT_LAUNCH_COMMAND, s.cwd); }}
+            // 新建 = 一个全新的会话，必须新起 sessionId（走 onLaunch → createSessionId）。
+            // 借用这条历史的 Claude UUID 的话：这个 UUID 已经被恢复过（tmux 里有 cc-<uuid>）时
+            // 开发机会直接 attach 到那个 claude，而不是起 codex；标签也会和「↩ 恢复」撞成同一个。
+            onClick={e => { e.stopPropagation(); onLaunch(s.cwd, DEFAULT_LAUNCH_COMMAND, s.machineId || 'local'); }}
             style={{
               background: T.bgCard, border: `1px solid ${T.border}`,
               color: T.success, borderRadius: '4px',
@@ -668,7 +673,7 @@ export default function SessionTabs({ token, selfUsername, sessions, activeSessi
 
       {sharingSession && <SessionSharing token={token} session={sharingSession} onClose={() => setSharingSession(null)} />}
       {tab === 'running' && <RunningTab onShare={setSharingSession} activeSessions={activeSessions} foldersByMachine={foldersByMachine} openTerminals={openTerminals} active={active} selfUsername={selfUsername} onOpen={onOpen} onStop={onStop} onClose={onClose} onRenameSession={onRenameSession} onMoveSession={onMoveSession} onCreateFolder={onCreateFolder} onRenameFolder={onRenameFolder} onDeleteFolder={onDeleteFolder} onMoveFolder={onMoveFolder} />}
-      {tab === 'history' && <HistoryTab historySessions={historySessions} active={active} onOpen={onOpen} onDelete={onDelete} />}
+      {tab === 'history' && <HistoryTab historySessions={historySessions} active={active} onOpen={onOpen} onLaunch={onLaunch} onDelete={onDelete} />}
       {tab === 'files'   && <FileBrowser ws={ws} machineId={machineId} machines={machines} historySessions={historySessions} onLaunch={onLaunch} onPreviewMd={onPreviewMd} onSelectMachine={onSelectMachine} />}
     </div>
   );

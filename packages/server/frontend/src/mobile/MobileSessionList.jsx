@@ -7,6 +7,7 @@ import {
   partitionByOwner, shouldGroupByOwner, sortOwnerKeys, UNOWNED_OWNER_KEY,
 } from '../folder-tree';
 import useFolderCollapse from '../useFolderCollapse';
+import { sessionKey } from '../session-key';
 import SessionSharing from '../SessionSharing';
 import { MobileActionSheet, MobilePromptSheet } from './MobileSheet';
 import { sessionLightStyle, sessionLightTitle } from '../session-light';
@@ -281,7 +282,7 @@ function SessionRow({ session, machineId, depth, isOpen, isActive, onOpen, onClo
 export default function MobileSessionList({
   token, selfUsername,
   machines, selectedMachine, onSelectMachine,
-  sessions, openSessionIds, activeSessionId,
+  sessions, openSessionKeys, activeSessionKey,
   onOpen, onCloseTab, onStop, onCreate, onRenameSession,
   folders = [],
   onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder,
@@ -347,7 +348,7 @@ export default function MobileSessionList({
     if (session.canShare) {
       items.unshift({ key: 'share', label: '共享窗口…', onSelect: () => setSheet({ kind: 'share', session }) });
     }
-    if (openSessionIds.has(session.sessionId)) {
+    if (openSessionKeys.has(sessionKey(session.machineId, session.sessionId))) {
       items.push({
         key: 'close',
         label: '关闭标签（不杀进程）',
@@ -461,8 +462,8 @@ export default function MobileSessionList({
         session={s}
         machineId={s.machineId}
         depth={depth}
-        isOpen={openSessionIds.has(s.sessionId)}
-        isActive={activeSessionId === s.sessionId}
+        isOpen={openSessionKeys.has(sessionKey(s.machineId, s.sessionId))}
+        isActive={activeSessionKey === sessionKey(s.machineId, s.sessionId)}
         onOpen={onOpen}
         onCloseTab={onCloseTab}
         onMenu={openSessionMenu}

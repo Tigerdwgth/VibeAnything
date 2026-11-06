@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { FULL_VIEWPORT_HEIGHT, TERMINAL_INPUT_FONT_SIZE } from './mobile-layout-config';
 import { formatTextBlock } from './terminal-io';
+import { isMacPlatform } from './terminal-clipboard-keys';
 
 // 终端输入框（composer）。桌面版 TerminalPanel 与手机版 MobileTerminal 共用同一份。
 //
@@ -16,8 +17,10 @@ import { formatTextBlock } from './terminal-io';
 // 按「发送/回车」时 `keydown Enter` **先于** `compositionend` 到达，此刻输入法还没提交文字。
 // 那一刻直接发 '\r' 会把回车丢掉（旧实现在组合期间 return），用户必须再按一次才发得出去。
 // 正解：组合中按 Enter 只记 `enterPending` 并 preventDefault；等 compositionend 把文字
-// 提交进 input.value 之后，**文字 + '\r' 一起发**；同时置 `ignoreNextEnter` 吞掉 Android
+// 提交进 input.value 之后，**文字 + '\r' 一起发**；同时在 IME_ENTER_ECHO_MS 内吞掉 Android
 // 在组合提交后可能补发的那一次 Enter keydown（否则整行会发两遍）。
+// 只吞这一小段时间窗：Mac Chrome / iOS 不补发，旧实现的「吞下一次」会一直挂着，
+// 把用户下一条消息的真回车吃掉，表现为「每条要按两次回车」（2026-11-06 复现）。
 //
 // ── 空框时的后门 ──
 // 框里有字 = 在编辑，退格/方向/删除走浏览器默认，Tab 插制表符；
@@ -67,6 +70,13 @@ const BASE_INPUT_STYLE = {
   maxHeight: `calc(${FULL_VIEWPORT_HEIGHT} * 0.4)`,
 };
 
+// 组合提交后补发的 Enter 只会紧跟着到达；超过这个时长的回车一定是用户自己按的
+const IME_ENTER_ECHO_MS = 300;
+
+// 非 Mac 上 Ctrl+V 是浏览器粘贴，空框时也要留给浏览器 —— 往框里第一次粘贴时框必然是空的，
+// 从前这一下被当成 ^V 发给了终端。只放行 V：空框没有东西可复制/剪切/全选，
+// Ctrl+C 在空框里必须照旧是打断，Ctrl+A/X 照旧是终端里的行首/编辑键。Mac 上粘贴是 Cmd+V。
+
 const FOCUS_BORDER = '#58a6ff';
 const BLUR_BORDER = 'rgba(255,255,255,0.15)';
 
@@ -94,8 +104,8 @@ const TerminalComposer = forwardRef(function TerminalComposer({
   const composingRef = useRef(false);
   // IME 组合中按下的回车：见文件头「Android 回车竞态」
   const enterPendingRef = useRef(false);
-  // Android 组合提交后可能再补发一次 Enter keydown，吞掉它避免整行发送两次
-  const ignoreNextEnterRef = useRef(false);
+  // Android 组合提交后可能再补发一次 Enter keydown：这个时刻之前到达的 Enter 吞掉，避免整行发送两次
+  const ignoreEnterUntilRef = useRef(0);
 
   // 框高跟内容走。隐藏的面板量不出高度（scrollHeight=0），等它显示时由下面的 ResizeObserver 补量。
   function fitHeight() {
@@ -175,7 +185,7 @@ const TerminalComposer = forwardRef(function TerminalComposer({
         e.preventDefault();
         return;
       }
-      if (ignoreNextEnterRef.current) { ignoreNextEnterRef.current = false; e.preventDefault(); return; }
+      if (Date.now() < ignoreEnterUntilRef.current) { ignoreEnterUntilRef.current = 0; e.preventDefault(); return; }
       e.preventDefault();
       sendLine();
       return;
@@ -204,6 +214,7 @@ const TerminalComposer = forwardRef(function TerminalComposer({
     else if (key === 'Delete') { e.preventDefault(); onSendText('\x1b[3~'); }
     else if (e.ctrlKey && !e.altKey && !e.metaKey) {
       const ch = key.toLowerCase();
+      if (ch === 'v' && !isMacPlatform(navigator.platform)) return;
       if (ch >= 'a' && ch <= 'z') {
         e.preventDefault();
         onSendText(String.fromCharCode(ch.charCodeAt(0) - 96));
@@ -236,7 +247,7 @@ const TerminalComposer = forwardRef(function TerminalComposer({
           // 组合中按下的回车在这里兑现：把提交的整段文字 + 回车一次发出
           if (enterPendingRef.current) {
             enterPendingRef.current = false;
-            ignoreNextEnterRef.current = true;   // 吞掉组合提交后可能重复的 Enter keydown
+            ignoreEnterUntilRef.current = Date.now() + IME_ENTER_ECHO_MS;   // 吞掉紧随其后的重复 Enter keydown
             sendLine();
           }
         }}

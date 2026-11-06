@@ -497,6 +497,35 @@ describe('粘贴', () => {
     expect(pastePanel()).toBeFalsy();     // 顺利读到就不该弹面板
   });
 
+  test('多行剪贴板按粘贴发（bracketed paste），不是每行一次回车', async () => {
+    stubClipboard({ readText: async () => 'line1\nline2' });
+    mount();
+    await act(async () => {
+      ws.dispatchEvent(new window.MessageEvent('message', {
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 's-1', data: b64('\x1b[?2004h') }),
+      }));
+      await new Promise(r => setTimeout(r, 50));
+    });
+    click('粘贴');
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(inputs().map(m => decode(m.data))).toEqual(['\x1b[200~line1\rline2\x1b[201~']);
+  });
+
+  test('手动粘贴框里的多行内容同样按粘贴发', () => {
+    stubClipboard(undefined);
+    mount();
+    click('粘贴');
+    const ta = pastePanel();
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    act(() => {
+      setter.call(ta, 'a\nb');
+      ta.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    click('发送到终端');
+    // 裸 shell 没开 bracketed paste：换行转成回车
+    expect(inputs().map(m => decode(m.data))).toEqual(['a\rb']);
+  });
+
   test('HTTP 页面上根本没有 clipboard 接口 → 弹手动粘贴框，而不是静默失败', () => {
     stubClipboard(undefined);
     mount();

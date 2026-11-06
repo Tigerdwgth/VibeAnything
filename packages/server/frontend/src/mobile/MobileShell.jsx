@@ -5,6 +5,7 @@ import {
   resolveDefaultMachine, loadPreferredMachine, savePreferredMachine, saveLastDir,
 } from '../machine-prefs';
 import { getRunningSessionTitle } from '../session-list-utils';
+import { sessionKey, isSameSession, renameOpenTerminals } from '../session-key';
 import useRelay from './useRelay';
 import MobileSessionList from './MobileSessionList';
 import MobileTerminal from './MobileTerminal';
@@ -21,6 +22,18 @@ import ProfileModal from '../ProfileModal';
 // 各管各的标签，手机上随手关一个不该把桌面的工作区也改了。
 const OPEN_KEY = 'mobileOpenTerminals';
 const ACTIVE_KEY = 'mobileActiveSession';
+// 当前会话所在的机器。sessionId 在两台机器上可能重名，光记 sessionId 认不准是哪一个
+// （见 session-key.js）；分开存是为了不动 ACTIVE_KEY 的旧格式。
+const ACTIVE_MACHINE_KEY = 'mobileActiveMachine';
+
+/** 读回上次的当前会话 { machineId, sessionId }。旧版只存了 sessionId：按它在打开列表里找回机器。 */
+function readActive(openTerminals) {
+  const sessionId = localStorage.getItem(ACTIVE_KEY);
+  if (!sessionId) return null;
+  const machineId = localStorage.getItem(ACTIVE_MACHINE_KEY)
+    ?? openTerminals.find(t => t.sessionId === sessionId)?.machineId;
+  return machineId ? { machineId, sessionId } : null;
+}
 
 function readJson(key, fallback) {
   try {
@@ -39,7 +52,8 @@ const TOPBAR_BTN = (T) => ({
 export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme }) {
   const T = useTheme();
   const [openTerminals, setOpenTerminals] = useState(() => readJson(OPEN_KEY, []));
-  const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem(ACTIVE_KEY) || null);
+  // 当前会话 { machineId, sessionId } | null。一律按 machineId + sessionId 认（见 session-key.js）
+  const [active, setActive] = useState(() => readActive(readJson(OPEN_KEY, [])));
   // 只存「用户明确选过什么」：null = 从没选过，'' = 明确选了「所有开发机」。
   // 真正生效的机器由 resolveDefaultMachine 从它和在线列表推出来（见下面的 selectedMachine），
   // 不用 effect 去回写 state —— 那会多一轮渲染，且选中的机器掉线时容易和列表打架。
@@ -65,25 +79,21 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
   useEffect(() => { openTerminalsRef.current = openTerminals; }, [openTerminals]);
 
   const closeTab = useCallback((machineId, sessionId) => {
-    const remaining = openTerminalsRef.current.filter(t => t.sessionId !== sessionId);
+    const remaining = openTerminalsRef.current.filter(t => !isSameSession(t, machineId, sessionId));
     setOpenTerminals(remaining);
-    setActiveSessionId(cur => (cur !== sessionId ? cur : (remaining[0]?.sessionId || null)));
+    setActive(cur => (!isSameSession(cur, machineId, sessionId) ? cur
+      : (remaining[0] ? { machineId: remaining[0].machineId, sessionId: remaining[0].sessionId } : null)));
   }, []);
 
   // 会话改名成功后 sessionId 会变（sessionId 就是开发机上的 tmux 名）。开着的标签
   // 必须跟着换名字，否则它指着一个已经不存在的名字：手机一切后台就重连，重连时
   // 那个标签会照旧名发 open_terminal，开发机找不到就**新建**一个空会话。
   // 与 closeTab 同理，这是 ws 回调里调的，读 ref 而不是 state。
+  // 规则与桌面版共用（session-key.js 的 renameOpenTerminals）。
   const handleSessionRenamed = useCallback((machineId, oldSessionId, newSessionId) => {
     if (!oldSessionId || !newSessionId || oldSessionId === newSessionId) return;
-    // 按 machineId + sessionId 匹配：sessionId 是 tmux 名，两台机器上重名很常见（main、dev…）
-    setOpenTerminals(openTerminalsRef.current.map(t => (
-      t.sessionId === oldSessionId && t.machineId === machineId
-        // 命令里也可能带着旧名（`claude --resume <id>`），一起换掉
-        ? { ...t, sessionId: newSessionId, command: t.command?.map(a => (a === oldSessionId ? newSessionId : a)) }
-        : t
-    )));
-    setActiveSessionId(cur => (cur === oldSessionId ? newSessionId : cur));
+    setOpenTerminals(renameOpenTerminals(openTerminalsRef.current, machineId, oldSessionId, newSessionId));
+    setActive(cur => (isSameSession(cur, machineId, oldSessionId) ? { machineId, sessionId: newSessionId } : cur));
   }, []);
 
   const {
@@ -98,9 +108,14 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
 
   useEffect(() => { localStorage.setItem(OPEN_KEY, JSON.stringify(openTerminals)); }, [openTerminals]);
   useEffect(() => {
-    if (activeSessionId) localStorage.setItem(ACTIVE_KEY, activeSessionId);
-    else localStorage.removeItem(ACTIVE_KEY);
-  }, [activeSessionId]);
+    if (active) {
+      localStorage.setItem(ACTIVE_KEY, active.sessionId);
+      localStorage.setItem(ACTIVE_MACHINE_KEY, active.machineId);
+    } else {
+      localStorage.removeItem(ACTIVE_KEY);
+      localStorage.removeItem(ACTIVE_MACHINE_KEY);
+    }
+  }, [active]);
 
   // 机器列表：在线机器为准，会话数从 active_sessions 算
   const machines = useMemo(() => {
@@ -126,14 +141,17 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
     selectedMachine ? activeSessions.filter(s => s.machineId === selectedMachine) : activeSessions
   ), [activeSessions, selectedMachine]);
 
-  const openSessionIds = useMemo(() => new Set(openTerminals.map(t => t.sessionId)), [openTerminals]);
+  const openSessionKeys = useMemo(
+    () => new Set(openTerminals.map(t => sessionKey(t.machineId, t.sessionId))),
+    [openTerminals]
+  );
 
   // 真正显示哪个终端。localStorage 里记的那个可能已经不在列表里了（上次在别处关掉的），
   // 硬按它渲染会得到「有终端却一个都不可见」的白屏 —— 落回第一个。
   const activeTerminal = useMemo(() => (
-    openTerminals.find(t => t.sessionId === activeSessionId) || openTerminals[0] || null
-  ), [openTerminals, activeSessionId]);
-  const visibleSessionId = activeTerminal?.sessionId || null;
+    openTerminals.find(t => isSameSession(t, active?.machineId, active?.sessionId)) || openTerminals[0] || null
+  ), [openTerminals, active]);
+  const visibleKey = activeTerminal ? sessionKey(activeTerminal.machineId, activeTerminal.sessionId) : null;
 
   function chooseMachine(mid) {
     setSavedMachine(mid);
@@ -143,11 +161,11 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
   function openTerminal(machineId, sessionId, command, cwd) {
     const launchCommand = getLaunchCommand(command);
     setOpenTerminals(prev => (
-      prev.some(t => t.sessionId === sessionId)
+      prev.some(t => isSameSession(t, machineId, sessionId))
         ? prev
         : [...prev, { machineId, sessionId, cwd, command: launchCommand }]
     ));
-    setActiveSessionId(sessionId);
+    setActive({ machineId, sessionId });
     setDrawerOpen(false);
   }
 
@@ -164,7 +182,8 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
     closeTab(machineId, sessionId);
   }
 
-  const activeSession = activeSessions.find(s => s.sessionId === visibleSessionId);
+  const activeSession = activeTerminal
+    && activeSessions.find(s => isSameSession(s, activeTerminal.machineId, activeTerminal.sessionId));
   const title = activeSession
     ? getRunningSessionTitle(activeSession)
     : (activeTerminal ? activeTerminal.sessionId : 'VibeAnything');
@@ -175,8 +194,8 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
     selectedMachine,
     onSelectMachine: chooseMachine,
     sessions: visibleSessions,
-    openSessionIds,
-    activeSessionId: visibleSessionId,
+    openSessionKeys,
+    activeSessionKey: visibleKey,
     onOpen: openTerminal,
     onCloseTab: closeTab,
     onStop: handleStop,
@@ -252,13 +271,13 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
         ) : (
           openTerminals.map(t => (
             <MobileTerminal
-              key={t.sessionId}
+              key={sessionKey(t.machineId, t.sessionId)}
               machineId={t.machineId}
               sessionId={t.sessionId}
               command={t.command}
               cwd={t.cwd}
               ws={ws}
-              visible={t.sessionId === visibleSessionId}
+              visible={sessionKey(t.machineId, t.sessionId) === visibleKey}
             />
           ))
         )}

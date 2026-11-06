@@ -19,7 +19,8 @@ import { playSound, isSoundEnabled, setSoundEnabled } from './sound';
 import { createSessionId, getLaunchCommand } from './launch-config';
 import { FULL_VIEWPORT_HEIGHT } from './mobile-layout-config';
 import { resolveDefaultMachine, loadPreferredMachine, savePreferredMachine, loadHideOthers, saveHideOthers } from './machine-prefs';
-import { mergeActiveSessions } from './session-merge';
+import { mergeActiveSessions, dropOfflineMachines } from './session-merge';
+import { sessionKey, isSameSession, renameOpenTerminals } from './session-key';
 import { parseWsMessage } from './ws-message';
 
 // 顶栏胶囊按钮：三处（隐藏他人会话 / 视图切换 / 并列）同款，只有选中态不同
@@ -137,6 +138,8 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
   useEffect(() => { authCallbacksRef.current = { onAuthFailed }; });
   // ws 的 onmessage 是建连那一刻的闭包，而 notify 每次渲染都是新函数 —— 走 ref 拿最新的那个
   const notifyRef = useRef(notify);
+  // 本页发出、还没回执的 md 预览请求 { machineId, path }。file_content 只认它（见 onmessage）
+  const pendingPreviewRef = useRef(null);
 
   const machines = useMemo(() => {
     // 优先用服务器推送的在线机器列表；session 里的机器作为补充
@@ -181,10 +184,11 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
 
   // 关闭一个 tab（不杀进程）。不读闭包里的 openTerminals/active —— ws 消息回调
   // （归属被拒时自动关窗）拿到的是首次渲染的旧闭包，必须走 ref + 函数式更新。
+  // 一律按 machineId + sessionId 认会话：两台机器上同名 tmux 很常见（见 session-key.js）。
   function closeTerminal(machineId, sessionId) {
-    const remaining = openTerminalsRef.current.filter(t => t.sessionId !== sessionId);
+    const remaining = openTerminalsRef.current.filter(t => !isSameSession(t, machineId, sessionId));
     setOpenTerminals(remaining);
-    setActive(cur => cur?.sessionId !== sessionId ? cur
+    setActive(cur => !isSameSession(cur, machineId, sessionId) ? cur
       : (remaining[0] ? { machineId: remaining[0].machineId, sessionId: remaining[0].sessionId } : null));
   }
 
@@ -220,7 +224,11 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
           if (!msg || msg.type === 'pty_data') return;
           if (msg.type === 'whoami')        { setIsAdmin(msg.role === 'admin'); setUsername(msg.username || ''); }
           if (msg.type === 'session_list')    setSessions(msg.sessions || []);
-          if (msg.type === 'machine_list')    setOnlineMachines(msg.machines || []);
+          if (msg.type === 'machine_list') {
+            setOnlineMachines(msg.machines || []);
+            // 下线的机器不会再推空的 active_sessions，它的会话要在这里摘掉（见 session-merge.js）
+            setActiveSessions(prev => dropOfflineMachines(prev, msg.machines));
+          }
           if (msg.type === 'active_sessions') {
             // 按 machineId 分区合并（规则与手机版共用，见 session-merge.js）
             setActiveSessions(prev => mergeActiveSessions(prev, msg.sessions, msg.machineId));
@@ -229,6 +237,14 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
             // 按 machineId 分区合并：每条 folders 消息携带一台机器的全量文件夹树，只替换该机器
             const mid = msg.machineId;
             setFoldersByMachine(prev => ({ ...prev, [mid]: msg.folders || [] }));
+          }
+          if (msg.type === 'session_renamed') {
+            // 改名成功：sessionId 就是 tmux 名，开着的标签必须跟着换（与手机版同一份规则，见 session-key.js）。
+            // 这是建连时的闭包，只能用函数式更新，不读 state。
+            const { machineId: mid, oldSessionId, newSessionId } = msg;
+            setOpenTerminals(prev => renameOpenTerminals(prev, mid, oldSessionId, newSessionId));
+            setActive(cur => (isSameSession(cur, mid, oldSessionId) && newSessionId
+              ? { machineId: mid, sessionId: newSessionId } : cur));
           }
           if (msg.type === 'rename_error') {
             notifyRef.current(`重命名失败：${msg.error || '未知错误'}`, 'error');
@@ -242,10 +258,15 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
             const incoming = (msg.sessions || []).map(s => ({ ...s, machineId: s.machineId || mid }));
             setHistorySessions(prev => [...prev.filter(s => s.machineId !== mid), ...incoming]);
           }
-          if (msg.type === 'session_deleted') setHistorySessions(prev => prev.filter(s => s.sessionId !== msg.sessionId));
+          if (msg.type === 'session_deleted') setHistorySessions(prev => prev.filter(s => !isSameSession(s, msg.machineId, msg.sessionId)));
           if (msg.type === 'file_content') {
-            if (msg.error) { notifyRef.current(`文件读取失败：${msg.error}`, 'error'); }
-            else { setMdPreview({ path: msg.path, content: msg.content }); setViewMode('markdown'); }
+            // 只认本页刚点的那个文件：回执不是本页请求的（别的标签页 / 别人点的预览）不能把界面切走
+            const want = pendingPreviewRef.current;
+            if (want && want.machineId === msg.machineId && want.path === msg.path) {
+              pendingPreviewRef.current = null;
+              if (msg.error) { notifyRef.current(`文件读取失败：${msg.error}`, 'error'); }
+              else { setMdPreview({ path: msg.path, content: msg.content }); setViewMode('markdown'); }
+            }
           }
           if (msg.type === 'hook_event') {
             playSound(msg.hookEvent);
@@ -254,7 +275,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
             if (msg.hookState && msg.sessionId) {
               const running = msg.hookState === 'running';
               setActiveSessions(prev => prev.map(s =>
-                s.sessionId === msg.sessionId ? { ...s, isRunning: running } : s
+                isSameSession(s, msg.machineId, msg.sessionId) ? { ...s, isRunning: running } : s
               ));
             }
             window.dispatchEvent(new CustomEvent('hook:event', { detail: msg }));
@@ -349,7 +370,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
 
   function openTerminal(machineId, sessionId, command, cwd) {
     const isResume = command?.includes('--resume');
-    const exists = openTerminals.some(t => t.sessionId === sessionId);
+    const exists = openTerminals.some(t => isSameSession(t, machineId, sessionId));
     const launchCommand = getLaunchCommand(command);
     if (!exists) {
       setOpenTerminals(prev => [...prev, { machineId, sessionId, cwd, command: launchCommand }]);
@@ -357,11 +378,11 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
       // 乐观更新：恢复的 session 立即出现在运行中 Tab
       if (isResume) {
         setActiveSessions(prev => {
-          if (prev.some(s => s.sessionId === sessionId)) return prev;
+          if (prev.some(s => isSameSession(s, machineId, sessionId))) return prev;
           return [...prev, { sessionId, machineId, cwd, mtime: new Date().toISOString(), _optimistic: true }];
         });
         setTimeout(() => {
-          setActiveSessions(prev => prev.filter(s => !(s.sessionId === sessionId && s._optimistic)));
+          setActiveSessions(prev => prev.filter(s => !(isSameSession(s, machineId, sessionId) && s._optimistic)));
         }, 10000);
       }
     }
@@ -380,21 +401,22 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
 
   function previewMd(filePath) {
     const mid = currentMachineId();
+    pendingPreviewRef.current = { machineId: mid, path: filePath };
     wsRef.current?.send(JSON.stringify({ type: 'read_file', machineId: mid, path: filePath }));
   }
 
   function deleteSession(machineId, sessionId) {
     if (!confirm('确定删除此 session？')) return;
     wsRef.current?.send(JSON.stringify({ type: 'delete_session', machineId, sessionId }));
-    setHistorySessions(prev => prev.filter(s => s.sessionId !== sessionId));
+    setHistorySessions(prev => prev.filter(s => !isSameSession(s, machineId, sessionId)));
   }
 
   function stopSession(machineId, sessionId) {
     if (!confirm('确定停止此 session？claude 进程将被终止。')) return;
     wsRef.current?.send(JSON.stringify({ type: 'stop_terminal', machineId, sessionId }));
-    setOpenTerminals(prev => prev.filter(t => t.sessionId !== sessionId));
-    setActiveSessions(prev => prev.filter(s => s.sessionId !== sessionId));
-    if (active?.sessionId === sessionId) setActive(null);
+    setOpenTerminals(prev => prev.filter(t => !isSameSession(t, machineId, sessionId)));
+    setActiveSessions(prev => prev.filter(s => !isSameSession(s, machineId, sessionId)));
+    if (isSameSession(active, machineId, sessionId)) setActive(null);
   }
 
   // ── 会话重命名 + 文件夹分组 ──────────────────────────────────
@@ -411,7 +433,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
   function moveSession(machineId, sessionId, folderId) {
     const fid = folderId || null;
     sendWs({ type: 'move_session', machineId, sessionId, folderId: fid });
-    setActiveSessions(prev => prev.map(s => s.sessionId === sessionId ? { ...s, folderId: fid } : s));
+    setActiveSessions(prev => prev.map(s => isSameSession(s, machineId, sessionId) ? { ...s, folderId: fid } : s));
   }
   function createFolder(machineId, name, parentId) {
     sendWs({ type: 'create_folder', machineId, name: name || '新文件夹', parentId: parentId || null });
@@ -988,13 +1010,13 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
             <div style={{ flex: 1, display: viewMode === 'terminal' ? 'flex' : 'none', overflow: 'hidden' }}>
               {openTerminals.map(t => (
                 <TerminalPanel
-                  key={t.sessionId}
+                  key={sessionKey(t.machineId, t.sessionId)}
                   machineId={t.machineId}
                   sessionId={t.sessionId}
                   command={t.command}
                   cwd={t.cwd}
                   ws={wsRef.current}
-                  visible={active?.sessionId === t.sessionId}
+                  visible={isSameSession(active, t.machineId, t.sessionId)}
                 />
               ))}
               {!active && (
@@ -1038,7 +1060,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                     seen.add(key(t));
                   }
                   return merged;
-                })()} machines={machines} foldersByMachine={foldersByMachine} onFocusSession={(sessionId, machineId) => {
+                })()} machines={machines} foldersByMachine={foldersByMachine} activeSession={active} onFocusSession={(sessionId, machineId) => {
                   // 点小人 = 打开那个会话的终端。原来只 setActive 不 openTerminal ——
                   // 对一个还没开过标签的会话，切过去是一片空占位（终端层只渲染 openTerminals）。
                   const sameMachine = (s) => (s.machineId || 'local') === (machineId || 'local');

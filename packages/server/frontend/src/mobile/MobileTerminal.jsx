@@ -5,7 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { getLaunchCommand } from '../launch-config';
 import {
-  encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit,
+  encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit, formatTextBlock,
 } from '../terminal-io';
 import { takeWheelSteps, buildWheelSequence, fingerDeltaToAccum } from '../terminal-touch-scroll';
 import { buildClickSequence, clientXYToCell } from '../terminal-mouse-click';
@@ -112,8 +112,7 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
     navigator.clipboard.readText()
       .then((text) => {
         if (!text) { notify('剪贴板是空的'); return; }
-        sendToProgram(text);
-        notify('已粘贴到终端');
+        sendPasted(text);
       })
       .catch(() => setPasteFallback(''));
   }
@@ -123,7 +122,13 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
     const text = pasteFallback;
     setPasteFallback(null);
     if (!text) return;
-    sendToProgram(text);
+    sendPasted(text);
+  }
+
+  // 粘贴进来的一段文字和输入框同一套规则：多行按 bracketed paste 发（见 terminal-io.js 的
+  // formatTextBlock），否则每个换行都等于按一次回车，Claude Code 会先把第一行提交出去。
+  function sendPasted(text) {
+    sendToProgram(formatTextBlock(text, termRef.current.modes.bracketedPasteMode));
     notify('已粘贴到终端');
   }
 

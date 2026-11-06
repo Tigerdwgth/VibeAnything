@@ -14,7 +14,7 @@ import { clipboardKeyAction, isMacPlatform } from './terminal-clipboard-keys';
 import { isTouchOnlyDevice } from './input-device';
 import { attachImeCursorSync, attachImeCommitInput, isImeProcessKeydown } from './terminal-ime';
 import {
-  encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit,
+  encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit, formatTextBlock,
 } from './terminal-io';
 import { copyTextToClipboard as copyToClipboard } from './clipboard';
 import { selectionAsCommand } from './terminal-command-copy';
@@ -780,7 +780,8 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
             if (!navigator.clipboard?.readText) { notifyUpload(hint, true); return; }
             navigator.clipboard.readText()
               .then(text => {
-                if (text) { sendToProgram(text); notifyUpload('已粘贴到终端'); }
+                // 和输入框、xterm 原生粘贴同一套规则：多行按 bracketed paste 发，否则每个换行都是一次回车
+                if (text) { sendToProgram(formatTextBlock(text, termRef.current.modes.bracketedPasteMode)); notifyUpload('已粘贴到终端'); }
                 else notifyUpload('剪贴板是空的');
               })
               .catch(() => notifyUpload(hint, true));

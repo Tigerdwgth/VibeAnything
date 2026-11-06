@@ -89,7 +89,7 @@ test('手机：选中机器上的会话按人分段，段内是各自的文件�
       selfUsername="admin"
       machines={[{ machineId: 'macmini', defaultWorkDir: '/' }]} selectedMachine="macmini" onSelectMachine={() => {}}
       sessions={SESSIONS.filter(s => s.machineId === 'macmini')}
-      openSessionIds={new Set()} activeSessionId={null}
+      openSessionKeys={new Set()} activeSessionKey={null}
       folders={FOLDERS.macmini}
       onOpen={() => {}} onCloseTab={() => {}} onStop={() => {}} onCreate={() => {}} onRenameSession={() => {}}
     />

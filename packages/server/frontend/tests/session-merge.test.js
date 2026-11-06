@@ -4,7 +4,8 @@
 // 一条消息那台的会话。这里用「回归见证」把那个错法也写进来，证明用例真的抓得住。
 
 import { describe, test, expect } from 'vitest';
-import { mergeActiveSessions } from '../src/session-merge.js';
+import { mergeActiveSessions, dropOfflineMachines } from '../src/session-merge.js';
+import { renameOpenTerminals } from '../src/session-key.js';
 
 const sess = (sessionId, machineId, extra = {}) => ({ sessionId, machineId, ...extra });
 
@@ -66,5 +67,35 @@ describe('mergeActiveSessions', () => {
     mergeActiveSessions(prev, incoming, 'macmini');
     expect(incoming[0].machineId).toBeUndefined();
     expect(prev).toHaveLength(1);
+  });
+});
+
+describe('dropOfflineMachines', () => {
+  test('machine_list 里没有的机器整片摘掉，别的原样留着', () => {
+    const list = [sess('a1', 'mA'), sess('b1', 'mB'), sess('a2', 'mA')];
+    expect(dropOfflineMachines(list, [{ machineId: 'mA' }])).toEqual([sess('a1', 'mA'), sess('a2', 'mA')]);
+  });
+
+  test('没有可摘的就返回原数组（setState 不触发重渲染）', () => {
+    const list = [sess('a1', 'mA')];
+    expect(dropOfflineMachines(list, [{ machineId: 'mA' }, { machineId: 'mB' }])).toBe(list);
+  });
+});
+
+describe('renameOpenTerminals', () => {
+  const tab = (machineId, sessionId, command) => ({ machineId, sessionId, cwd: '/w', command });
+
+  test('只换这台机器上的那个标签，命令里的旧名一起换', () => {
+    const list = [tab('mA', 'old', ['claude', '--resume', 'old']), tab('mB', 'old', ['bash'])];
+    expect(renameOpenTerminals(list, 'mA', 'old', 'new')).toEqual([
+      tab('mA', 'new', ['claude', '--resume', 'new']),
+      tab('mB', 'old', ['bash']),
+    ]);
+  });
+
+  test('没开着这个会话、或新旧同名时原样返回', () => {
+    const list = [tab('mA', 'x', ['bash'])];
+    expect(renameOpenTerminals(list, 'mA', 'old', 'new')).toBe(list);
+    expect(renameOpenTerminals(list, 'mA', 'x', 'x')).toBe(list);
   });
 });

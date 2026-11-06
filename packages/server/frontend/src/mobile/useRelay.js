@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { mergeActiveSessions } from '../session-merge';
+import { mergeActiveSessions, dropOfflineMachines } from '../session-merge';
+import { isSameSession } from '../session-key';
 import { parseWsMessage } from '../ws-message';
 import { loadHideOthers } from '../machine-prefs';
 import { playSound } from '../sound';
@@ -61,6 +62,8 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
         setUsername(msg.username || '');
       } else if (msg.type === 'machine_list') {
         setMachines(msg.machines || []);
+        // 下线的机器不会再推空的 active_sessions，它的会话要在这里摘掉（见 session-merge.js）
+        setActiveSessions(prev => dropOfflineMachines(prev, msg.machines));
       } else if (msg.type === 'session_list') {
         setSessions(msg.sessions || []);
       } else if (msg.type === 'active_sessions') {
@@ -84,7 +87,7 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
         if (msg.hookState && msg.sessionId) {
           const running = msg.hookState === HOOK_STATE_RUNNING;
           setActiveSessions(prev => prev.map(s =>
-            s.sessionId === msg.sessionId ? { ...s, isRunning: running } : s
+            isSameSession(s, msg.machineId, msg.sessionId) ? { ...s, isRunning: running } : s
           ));
         }
       } else if (msg.type === 'pty_error' && msg.action === 'scroll_to_bottom') {
@@ -161,7 +164,7 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
   // 停止会话：真杀进程。列表立刻移除，不等服务端回推（它下一轮扫描也会这么说）。
   const stopSession = useCallback((machineId, sessionId) => {
     send({ type: 'stop_terminal', machineId, sessionId });
-    setActiveSessions(prev => prev.filter(s => s.sessionId !== sessionId));
+    setActiveSessions(prev => prev.filter(s => !isSameSession(s, machineId, sessionId)));
   }, [send]);
 
   // ── 会话 ──
@@ -180,7 +183,7 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
   const moveSession = useCallback((machineId, sessionId, folderId) => {
     const fid = folderId || null;
     send({ type: 'move_session', machineId, sessionId, folderId: fid });
-    setActiveSessions(prev => prev.map(s => (s.sessionId === sessionId ? { ...s, folderId: fid } : s)));
+    setActiveSessions(prev => prev.map(s => (isSameSession(s, machineId, sessionId) ? { ...s, folderId: fid } : s)));
   }, [send]);
 
   const createFolder = useCallback((machineId, name, parentId) => {

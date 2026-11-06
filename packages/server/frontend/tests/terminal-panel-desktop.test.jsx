@@ -292,6 +292,45 @@ describe('粘贴按钮在读不到剪贴板时要有出口', () => {
   });
 });
 
+// 「粘贴」按钮原来把剪贴板原样发出：多行内容里每个换行都等于按一次回车，
+// Claude Code 开着 bracketed paste 也照样先把第一行提交出去（2026-11-06 复现）。
+// 现在与输入框、xterm 原生粘贴同一套规则（terminal-io.js 的 formatTextBlock）。
+describe('粘贴按钮的多行内容按粘贴发', () => {
+  const byText = (t) => Array.from(host.querySelectorAll('button')).find(b => b.textContent === t);
+  let realClipboard;
+  beforeEach(() => { realClipboard = navigator.clipboard; });
+  afterEach(() => {
+    if (realClipboard === undefined) delete navigator.clipboard;
+    else Object.defineProperty(navigator, 'clipboard', { value: realClipboard, configurable: true });
+  });
+  const decode = (data) => new TextDecoder().decode(Uint8Array.from(atob(data), c => c.charCodeAt(0)));
+  const pasteClick = async () => {
+    act(() => { byText('粘贴').dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  };
+
+  test('程序开了 bracketed paste：整段包进粘贴标记，不逐行回车', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { readText: () => Promise.resolve('line1\nline2') }, configurable: true });
+    mount();
+    // 程序（Claude Code / 现代 shell）打开 bracketed paste，和真实终端收到的序列一样
+    await act(async () => {
+      ws.dispatchEvent(new window.MessageEvent('message', {
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 's-1', data: b64('\x1b[?2004h') }),
+      }));
+      await new Promise(r => setTimeout(r, 50));
+    });
+    await pasteClick();
+    expect(inputs().map(m => decode(m.data))).toEqual(['\x1b[200~line1\rline2\x1b[201~']);
+  });
+
+  test('程序没开 bracketed paste：换行转成终端的回车', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { readText: () => Promise.resolve('a\nb') }, configurable: true });
+    mount();
+    await pasteClick();
+    expect(inputs().map(m => decode(m.data))).toEqual(['a\rb']);
+  });
+});
+
 describe('复制命令按钮', () => {
   const byText = (t) => Array.from(host.querySelectorAll('button')).find(b => b.textContent === t);
 
