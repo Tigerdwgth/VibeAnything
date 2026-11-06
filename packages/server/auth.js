@@ -6,7 +6,29 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'users.db');
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+// 签名密钥绝不能有写死的默认值：仓库是公开的，默认串人人都知道，拿它就能签出任意 admin 票。
+// 没配 JWT_SECRET 时，首次启动生成一把随机密钥，和 users.db 放在同一目录（0600），之后复用。
+// 首次签发/校验时才取：只 require 本模块的进程（单元测试、CLI 子命令）不该在数据目录里落文件。
+const JWT_SECRET_PATH = path.join(path.dirname(DB_PATH), 'jwt-secret');
+let _jwtSecret = null;
+
+function jwtSecret() {
+  if (!_jwtSecret) _jwtSecret = process.env.JWT_SECRET || loadOrCreateJwtSecret(JWT_SECRET_PATH);
+  return _jwtSecret;
+}
+
+/** 读取数据目录下的密钥文件；不存在则生成。wx 防止两个进程同时首启时互相覆盖。 */
+function loadOrCreateJwtSecret(file) {
+  if (!fs.existsSync(file)) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try {
+      fs.writeFileSync(file, require('node:crypto').randomBytes(48).toString('hex'), { mode: 0o600, flag: 'wx' });
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;   // 另一个进程抢先写好了，下面读它的
+    }
+  }
+  return fs.readFileSync(file, 'utf8').trim();
+}
 // 会话有效期是**滑动**的：前端定期调 POST /api/session/refresh 换新票，
 // 30 天内打开过的设备永远不必重新登录。收回登录态靠 users.token_version，不靠缩短有效期。
 const SESSION_LIFETIME = '30d';
@@ -164,7 +186,7 @@ async function verifyPassword(username, password) {
 // tv 由这里统一盖章，调用方（登录 / 注册 / 续期 / 改密码）不用各自记得带。
 function generateToken(payload) {
   if (!_tokenVersions) throw new Error('token_version 尚未载入，须先 await getDb()');
-  return jwt.sign({ ...payload, tv: currentTokenVersion(payload.username) }, JWT_SECRET, { expiresIn: SESSION_LIFETIME });
+  return jwt.sign({ ...payload, tv: currentTokenVersion(payload.username) }, jwtSecret(), { expiresIn: SESSION_LIFETIME });
 }
 
 // 同步校验（relay 握手要用）：签名 + 有效期 + tv 与当前版本一致。
@@ -173,7 +195,7 @@ function verifyToken(token) {
   if (!_tokenVersions) return null;
   let payload;
   try {
-    payload = jwt.verify(token, JWT_SECRET);
+    payload = jwt.verify(token, jwtSecret());
   } catch {
     return null;
   }

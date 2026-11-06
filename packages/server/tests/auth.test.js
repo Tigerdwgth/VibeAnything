@@ -6,6 +6,8 @@ const fs = require('node:fs');
 
 // 用临时数据库测试
 process.env.DB_PATH = '/tmp/test-auth.db';
+// 不设的话 auth.js 会在 DB_PATH 同目录（/tmp）生成并留下一份 jwt-secret
+process.env.JWT_SECRET = 'auth-test-secret';
 // 清理旧测试数据库
 try { fs.unlinkSync('/tmp/test-auth.db'); } catch {}
 

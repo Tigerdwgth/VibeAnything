@@ -403,13 +403,16 @@ npx vibeanything --daemon start
 
 ### 待实现：会话列表之外的隔离面
 
-下列数据通道目前仍是**全量广播给所有登录用户**，需要时再按 owner 收口
-（它们在 `relay.js` 的 `BROWSER_POLICY` 里显式登记为 `{ open: true }`，收口时改那一行即可）：
-
-- `read_file` / `list_dir`：文件浏览器可浏览开发机整个文件系统，不受会话归属限制
-- `session_history`：`~/.claude/projects/**/*.jsonl` 扫出的历史会话列表。
-  历史会话没有 owner 概念（sessionId 是 claude 侧 UUID，与 tmux 会话不同域），
-  要收口得先决定归属怎么推断——按扫描它的开发机、还是按 cwd 匹配已登记会话。
+- **`read_file` / `list_dir` 仍对所有登录用户开放**：任何人都能浏览任意开发机的整个文件系统
+  （只受开发机侧 `fileAccess` 黑名单限制）。根因是机器本身没有归属概念 —— 普通用户本来就能在
+  任意开发机上新建会话。要收口得先引入「谁能用哪台机器」的授权模型，再改 `relay.js`
+  `BROWSER_POLICY` 里这两项的 `{ open: true }`。
+- **存量历史会话没有归属**：历史列表里的 claude UUID 只有在 hook 事件把它和一个有主的 tmux
+  会话对上之后才有主人。在此之前就已存在、再没跑过 hook 的历史会话一直无主，只有管理员看得到；
+  需要的话得补一次性迁移（例如按 cwd 匹配已登记会话）或由管理员手工转交。
+- **用量上报的 username 未绑定机器归属**：`POST /api/usage/report` 只校验 machineToken，
+  记录里的 `username` / `machineId` 由采集器自报，任何一把有效 token 都能替任何人写用量。
+  要绑定同样得先有「机器属于谁」的模型。
 
 ### 待实现：尺寸声明的服务端兜底
 

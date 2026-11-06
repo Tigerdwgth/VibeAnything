@@ -17,6 +17,7 @@ function sessionIdOf(s) {
 //   folders: 取出要校验归属的 folderId 列表（null/undefined = 根级，人人可用）
 //   claimSession: 该会话在开发机上还不存在时视为新建，认领归属而不是拒绝
 //   open: 尚未按归属收口的通道，显式声明开放（见 README「待实现」），而不是靠遗漏放行
+//   noMachine: 不指向某一台开发机的消息；其余类型的 machineId 必须是非空字符串
 const BROWSER_POLICY = {
   open_terminal:   { session: m => m.sessionId, claimSession: true },
   pty_attach:      { session: m => m.sessionId },
@@ -42,11 +43,38 @@ const BROWSER_POLICY = {
   delete_folder:   { folders: m => [m.folderId] },
   // 移动的目标父级同样要是自己的，否则会把文件夹塞进别人的树里
   move_folder:     { folders: m => [m.folderId, m.parentId] },
+  // 文件浏览器：普通用户本来就能在任意开发机上新建会话（机器没有归属概念），所以请求不按
+  // 机器收口；但回执只定向回发起的那个浏览器（见 _expectReply），不再广播给所有人。
   list_dir:             { open: true },
   read_file:            { open: true },
-  scan_history:         { open: true },
-  set_visibility_scope: { open: true },
+  scan_history:         { open: true, noMachine: true },
+  set_visibility_scope: { open: true, noMachine: true },
 };
+
+// 浏览器消息里这些字段一旦出现就必须是字符串（null 表示根级文件夹等「没有」语义，放行）。
+// 它们会被拼进台账 key、绑进 SQL、原样转给开发机：对象/数组混进来轻则错路由，
+// 重则 sql.js 绑定时抛异常。
+const STRING_FIELDS = ['machineId', 'sessionId', 'folderId', 'parentId', 'path', 'data', 'name', 'newName', 'cwd', 'direction'];
+
+/**
+ * 新认领的 sessionId 必须是「tmux 名稳定」的：开发机把 sessionId 映射成 tmux 名时会
+ * 加 cc- 前缀、把 . : 空白换掉、去掉结尾的 -、截到 48 个码点（lib/pty-manager.js tmuxName），
+ * 也会把与现有 tmux 名相同的 sessionId 直接当成那个会话。不满足这些条件的新 id 可能落到
+ * **别人已有的 tmux 窗口**上（例如拿 cc-<他人会话 id> 认领），台账按字符串精确比对拦不住。
+ * 前端新建会话的 id 是 new-<命令>-<时间戳>、恢复会话是 UUID，都满足。
+ */
+function isClaimableSessionId(id) {
+  return !id.startsWith('cc-') && !/[.:\s]/.test(id) && !id.endsWith('-') && Array.from(id).length <= 48;
+}
+
+// 开发机对这几类请求的回执不带 browserId（machine 协议里没有这个字段），relay 记下
+// 「谁在等哪条回执」，回执到达时只发给这些浏览器。键里带上用来配对的字段（daemon 原样回传）。
+const REPLY_MATCH = {
+  list_dir:       { reply: 'dir_entries',     field: 'path' },
+  read_file:      { reply: 'file_content',    field: 'path' },
+  delete_session: { reply: 'session_deleted', field: 'sessionId' },
+};
+const REPLY_TYPES = Object.fromEntries(Object.entries(REPLY_MATCH).map(([req, m]) => [m.reply, req]));
 
 // 浏览器的窗格操作 → 转给开发机时的消息类型。三者走同一条通道（同样的鉴权、同样的
 // 「机器不在线」回执），差别只在开发机侧调哪个 tmux 子命令 —— 登记在这里，
@@ -64,6 +92,10 @@ const PROJECTIONS = {
   session_list:    (relay, b, msg) => ({ ...msg, sessions: relay._filterSessions(b, msg.sessions, msg.machineId) }),
   active_sessions: (relay, b, msg) => ({ ...msg, sessions: relay._filterSessions(b, msg.sessions, msg.machineId) }),
   folders:         (relay, b, msg) => ({ ...msg, folders:  relay._filterFolders(b, msg.folders, msg.machineId) }),
+  // 历史会话（cwd、首句 prompt、文件路径）按会话归属过滤，规则与运行中会话一致
+  session_history: (relay, b, msg) => ({
+    ...msg, sessions: (msg.sessions || []).filter(s => relay._canAccess(b, msg.machineId, sessionIdOf(s))),
+  }),
 };
 
 // 出站可见性谓词：这条消息该不该发给这个浏览器（与投影正交）
@@ -131,7 +163,14 @@ function authenticateMachine(token, requestedMachineId) {
     return { machineId: boundId, bound: true, claimed: claimed && claimed !== boundId ? claimed : undefined };
   }
   if (token && MACHINE_TOKENS.has(token)) {
-    return { machineId: claimed || 'unknown', bound: false };
+    const machineId = claimed || 'unknown';
+    // 已登记的机器只认它自己的台账 token：旧全局 token 报这个名字就能顶掉真机、
+    // 收走所有人敲给它的键盘输入
+    if (machineTokens.hasMachine(machineId)) {
+      console.warn(`[relay] 拒绝旧全局 token 以已登记机器 "${machineId}" 的身份连接`);
+      return null;
+    }
+    return { machineId, bound: false };
   }
   return null;
 }
@@ -152,6 +191,32 @@ class RelayServer {
     this._browserId = 0;
     this._pingTimers = new Map();    // ws → { pingInterval, pongTimeout }
     this._sessionSizes = new Map();  // "machineId:sessionId" → 已下发给开发机的权威尺寸
+    // 等待定向回执的浏览器：`machineId\0回执类型\0配对字段` → Set<browserId>。
+    // 回执到达即删；机器断线、浏览器断线时清掉各自的条目，不会只增不减。
+    this._pendingReplies = new Map();
+  }
+
+  // ── 定向回执 ────────────────────────────────────────────────
+  _replyKey(machineId, replyType, value) {
+    return `${machineId}\0${replyType}\0${value ?? ''}`;
+  }
+
+  /** 请求已转给开发机：记下这个浏览器在等它的回执。 */
+  _expectReply(browserId, machineId, msg) {
+    const { reply, field } = REPLY_MATCH[msg.type];
+    const k = this._replyKey(machineId, reply, msg[field]);
+    if (!this._pendingReplies.has(k)) this._pendingReplies.set(k, new Set());
+    this._pendingReplies.get(k).add(browserId);
+  }
+
+  /** 回执只发给在等它的浏览器；没人等（例如 HTTP 接口发起的 list_dir）就丢弃。 */
+  _deliverReply(machineId, msg) {
+    const { field } = REPLY_MATCH[REPLY_TYPES[msg.type]];
+    const k = this._replyKey(machineId, msg.type, msg[field]);
+    const waiting = this._pendingReplies.get(k);
+    if (!waiting) return;
+    this._pendingReplies.delete(k);
+    for (const browserId of waiting) this._sendTo(this.browsers.get(browserId), { ...msg, machineId });
   }
 
   // ── 终端尺寸协商 ────────────────────────────────────────────
@@ -336,6 +401,17 @@ class RelayServer {
     console.log(`[relay] machine ${machineId}: 存量文件夹补登归属 ${claimed.length} 个`);
   }
 
+  /**
+   * open_terminal 是否算「新建会话」：台账里无主，且机器在线、已报过会话列表、列表里没有它。
+   * 以前只看「列表里没有」—— 机器离线或刚重连还没报列表时，拿别人的 sessionId 打开
+   * 就会把归属改到自己名下，机器回来后直接接管对方的终端。
+   */
+  _isUnclaimedNewSession(machineId, sessionId) {
+    if (owners.getOwner(machineId, sessionId)) return false;
+    const m = this.machines.get(machineId);
+    return !!m?.sessionsKnown && !this._machineHasSession(machineId, sessionId);
+  }
+
   /** 会话是否已在该机器上运行（用于区分「新建会话」与「attach 已有会话」）。 */
   _machineHasSession(machineId, sessionId) {
     const sessions = this.machines.get(machineId)?.sessions || [];
@@ -381,7 +457,10 @@ class RelayServer {
       }
     }
     console.log(`[relay] machine registered: ${machineId}`);
-    this.machines.set(machineId, { ws, sessions: [], defaultWorkDir, foldersMigrated: false });
+    // sessionsKnown = 这条连接是否已经报过 active_sessions（以 tmux 为准的真实列表）。
+    // 报之前 sessions 是空的，「列表里没有」不能当成「机器上没有」（见 _isUnclaimedNewSession）。
+    // session_list 不算：它出自另一套扫描，失败时会发空数组。
+    this.machines.set(machineId, { ws, sessions: [], sessionsKnown: false, defaultWorkDir, foldersMigrated: false });
     this._broadcastMachineList();
   }
 
@@ -398,6 +477,9 @@ class RelayServer {
     this._stopHeartbeat(ws);
     const cur = this.machines.get(machineId);
     if (cur && cur.ws === ws) {
+      // 这台机器的回执不会再来了
+      const prefix = `${machineId}\0`;
+      for (const k of [...this._pendingReplies.keys()]) if (k.startsWith(prefix)) this._pendingReplies.delete(k);
       this.unregisterMachine(machineId);
       this._broadcastSessionList();
     }
@@ -502,6 +584,9 @@ class RelayServer {
     const browser = this.browsers.get(browserId);
     if (!browser) return;
     this.browsers.delete(browserId);
+    for (const [k, waiting] of [...this._pendingReplies]) {
+      if (waiting.delete(browserId) && !waiting.size) this._pendingReplies.delete(k);
+    }
     for (const watchKey of [...browser.watching.keys()]) {
       browser.watching.delete(watchKey);
       const { machineId, id: sessionId } = owners.parseKey(watchKey);
@@ -551,6 +636,7 @@ class RelayServer {
   handleMachineMessage(machineId, raw) {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
     // pty_data 是每帧终端输出都走的热路径，逐条打日志比转发本身还贵
     if (msg.type !== 'pty_data') {
       const detail = msg.type === 'session_list' ? `(${(msg.sessions||[]).length} sessions)` :
@@ -597,6 +683,13 @@ class RelayServer {
     if (msg.type === 'session_deleted' && msg.sessionId) {
       owners.removeOwner(machineId, msg.sessionId);
     }
+    if (msg.type === 'hook_event') this._inferHookSessionOwner(machineId, msg);
+    // 目录列表 / 文件内容 / 删除回执：只回给发起请求的浏览器。以前是无差别广播，
+    // 任何人点开一个文件，所有登录用户都收到全文。
+    if (REPLY_TYPES[msg.type]) {
+      this._deliverReply(machineId, msg);
+      return;
+    }
     if (msg.type === 'pty_error' && msg.browserId) {
       this._sendTo(this.browsers.get(msg.browserId), { ...msg, machineId });
       return;
@@ -611,7 +704,7 @@ class RelayServer {
     // updateSessions 填充会永远是空的，getAllSessions()（归属管理 API 的数据源）跟着为空。
     if (msg.type === 'active_sessions') {
       const m = this.machines.get(machineId);
-      if (m) m.sessions = msg.sessions || [];
+      if (m) { m.sessions = msg.sessions || []; m.sessionsKnown = true; }
       this._broadcast({ ...msg, machineId });
       return;
     }
@@ -627,10 +720,29 @@ class RelayServer {
       return;
     }
     if (msg.type === 'hook_event' || msg.type === 'rename_error' || msg.type === 'session_history' ||
-        msg.type === 'dir_entries' || msg.type === 'session_deleted' || msg.type === 'file_content' ||
         msg.type === 'pty_error') {
       this._broadcast({ ...msg, machineId });
     }
+  }
+
+  /**
+   * 历史会话的归属推断。Dashboard 新建的会话在台账里记的是 new-<命令>-<时间戳>，
+   * 而历史列表（session_history）里是 claude 侧的 UUID，两者不同域；能把它们对上的只有
+   * hook 事件 —— 它同时带着 UUID（sessionId）和所在的 tmux 窗口名（tmuxSession）。
+   *
+   * tmux 窗口名有两种来路：dashboard 建的是 cc-<sessionId>，手动建的就是 sessionId 本身，
+   * 所以两种 key 都查。只在 UUID 还无主、且 tmux 那头恰好对应**一个**主人时登记 ——
+   * 已有主的 UUID 绝不改归属，对不上或对出两个人都不下结论。
+   * 只从开发机连接进来（hook_event 不在 BROWSER_POLICY 里，浏览器发了也会被丢弃）。
+   */
+  _inferHookSessionOwner(machineId, msg) {
+    const { sessionId, tmuxSession } = msg;
+    if (typeof sessionId !== 'string' || !sessionId || typeof tmuxSession !== 'string' || !tmuxSession) return;
+    if (sessionId === tmuxSession || owners.getOwner(machineId, sessionId)) return;
+    const keys = tmuxSession.startsWith('cc-') ? [tmuxSession, tmuxSession.slice(3)] : [tmuxSession];
+    const found = new Set(keys.map(k => owners.getOwner(machineId, k)).filter(Boolean));
+    if (found.size !== 1) return;
+    owners.setOwner(machineId, sessionId, [...found][0]);
   }
 
   /**
@@ -638,16 +750,24 @@ class RelayServer {
    * 前端过滤只是障眼法 —— 不在这里拦，对方改个 sessionId 就能操作别人的会话。
    */
   _authorize(browser, msg) {
-    const policy = BROWSER_POLICY[msg.type];
+    // hasOwn：msg.type 是外部输入，'constructor' 之类会顺着原型链查到 Object 的成员
+    const policy = Object.hasOwn(BROWSER_POLICY, msg.type) ? BROWSER_POLICY[msg.type] : null;
     if (!policy) return false;
+    if (!policy.noMachine && (typeof msg.machineId !== 'string' || !msg.machineId)) return false;
     if (policy.open) return true;
 
     if (policy.session) {
       const sessionId = policy.session(msg);
-      // 机器上还没有这个会话 = 新建，归创建者所有；已存在则必须已经是自己的
-      if (policy.claimSession && !this._machineHasSession(msg.machineId, sessionId)) {
-        owners.setOwner(msg.machineId, sessionId, browser.user.username);
+      if (typeof sessionId !== 'string' || !sessionId) return false;
+      if (policy.claimSession && this._isUnclaimedNewSession(msg.machineId, sessionId)) {
+        // 无主、且机器确认没有这个会话 = 新建，归创建者所有
+        if (!isClaimableSessionId(sessionId)) {
+          this._denyAccess(browser, msg.type, msg.machineId, sessionId);
+          return false;
+        }
+        owners.claimOwner(msg.machineId, sessionId, browser.user.username);
       } else if (!this._canAccess(browser, msg.machineId, sessionId)) {
+        // 台账里已有主人时绝不改归属：非主人、非管理员、未被共享的一律拒绝
         this._denyAccess(browser, msg.type, msg.machineId, sessionId);
         return false;
       }
@@ -663,6 +783,8 @@ class RelayServer {
   handleBrowserMessage(browserId, raw) {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
+    if (STRING_FIELDS.some(f => msg[f] != null && typeof msg[f] !== 'string')) return;
     const browser = this.browsers.get(browserId);
     if (!browser) return;
     if (!this._authorize(browser, msg)) return;
@@ -728,7 +850,7 @@ class RelayServer {
     } else if (msg.type === 'scan_history') {
       this._toMachines({ type: 'scan_history' });
     } else if (msg.type === 'list_dir') {
-      this._toMachine(msg.machineId, msg);
+      if (this._toMachine(msg.machineId, { type: 'list_dir', path: msg.path })) this._expectReply(browserId, msg.machineId, msg);
     } else if (msg.type === 'pty_attach') {
       if (!browser.watching.has(watchKey())) browser.watching.set(watchKey(), null);
     } else if (msg.type === 'close_terminal') {
@@ -740,9 +862,9 @@ class RelayServer {
       this._sessionSizes.delete(watchKey());
       this._toMachine(msg.machineId, { type: 'pty_kill', sessionId: msg.sessionId });
     } else if (msg.type === 'delete_session') {
-      this._toMachine(msg.machineId, { type: 'delete_session', sessionId: msg.sessionId });
+      if (this._toMachine(msg.machineId, { type: 'delete_session', sessionId: msg.sessionId })) this._expectReply(browserId, msg.machineId, msg);
     } else if (msg.type === 'read_file') {
-      this._toMachine(msg.machineId, { type: 'read_file', path: msg.path });
+      if (this._toMachine(msg.machineId, { type: 'read_file', path: msg.path })) this._expectReply(browserId, msg.machineId, msg);
     } else if (msg.type === 'upload_file') {
       // 粘贴/拖入的文件：relay 只做转发，不落盘 —— 文件必须躺在跑 claude 的那台机器上
       const sent = this._toMachine(msg.machineId, {
@@ -770,6 +892,11 @@ class RelayServer {
       // 删掉的文件夹不留归属记录，否则台账无限增长
       if (msg.type === 'delete_folder') owners.removeFolderOwner(msg.machineId, msg.folderId);
     }
+  }
+
+  /** 单条消息处理出错只丢这一条：异常冒到 ws 的事件回调外面就是整个进程退出。 */
+  _safely(label, fn) {
+    try { fn(); } catch (e) { console.error(`[relay] ${label} 消息处理失败:`, e); }
   }
 
   attachToHttpServer(server) {
@@ -807,7 +934,7 @@ class RelayServer {
         }
         this.registerMachine(machineId, ws);
         this._startHeartbeat(ws, `machine(${machineId})`);
-        ws.on('message', (data) => this.handleMachineMessage(machineId, data.toString()));
+        ws.on('message', (data) => this._safely(`machine(${machineId})`, () => this.handleMachineMessage(machineId, data.toString())));
         ws.on('close', () => this._handleMachineClose(machineId, ws));
         return;
       }
@@ -822,7 +949,7 @@ class RelayServer {
         role: payload.role || 'user',   // 存量 JWT（24h 有效期）里没有 role
       }, url.searchParams.get('ownOnly') === '1');
       this._startHeartbeat(ws, `browser(#${browserId})`);
-      ws.on('message', (data) => this.handleBrowserMessage(browserId, data.toString()));
+      ws.on('message', (data) => this._safely(`browser(#${browserId})`, () => this.handleBrowserMessage(browserId, data.toString())));
       ws.on('close', () => {
         this._stopHeartbeat(ws);
         this._removeBrowser(browserId);
