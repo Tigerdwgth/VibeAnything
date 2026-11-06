@@ -172,6 +172,45 @@ test('第二个观众接入已开着的 PTY：换新 attach 客户端，两个�
   }
 });
 
+// 本进程打开着的 PTY 主设备数。macOS 上 node-pty 1.1.0 每 spawn 一次漏一个
+// （microsoft/node-pty#950），系统上限 kern.tty.ptmx_max=511，用完 daemon 就 posix_spawnp failed 崩掉。
+function openPtmxCount() {
+  if (process.platform === 'linux') {
+    return require('node:fs').readdirSync('/proc/self/fd').filter((fd) => {
+      try { return require('node:fs').readlinkSync(`/proc/self/fd/${fd}`).endsWith('ptmx'); } catch { return false; }
+    }).length;
+  }
+  const out = spawnSync('lsof', ['-b', '-n', '-P', '-w', '-p', String(process.pid)], { encoding: 'utf8' }).stdout;
+  return out.split('\n').filter((l) => l.includes('ptmx')).length;
+}
+
+test('反复 attach / 关闭不漏 PTY：观众全关后打开的 PTY 回到起点', { skip: hasTmux ? false : 'tmux 不可用' }, async () => {
+  const id = `vibe-leak-${process.pid}`;
+  const name = `cc-${id}`;
+  spawnSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' });
+  const mgr = new PtyManager();
+  const opts = { cols: 80, rows: 24, command: ['sleep', '600'], onData() {}, onExit() {} };
+  const before = openPtmxCount();
+  try {
+    for (let i = 0; i < 4; i++) {
+      mgr.create(id, opts);           // 重复 attach：每次换一个新的 attach 客户端
+      await sleep(400);
+    }
+    for (let i = 0; i < 3; i++) {
+      mgr.destroy(id);
+      await sleep(300);
+      mgr.create(id, opts);
+      await sleep(300);
+    }
+    mgr.destroy(id);
+    assert.ok(await waitFor(() => openPtmxCount() === before, 5000),
+      `观众全关后还开着 ${openPtmxCount() - before} 个 PTY`);
+  } finally {
+    mgr.destroyAll();
+    spawnSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' });
+  }
+});
+
 test('窗口高度扣掉 tmux 状态栏 —— 与 tmux 自己的计算一致', { skip: hasTmux ? false : 'tmux 不可用' }, async () => {
   const id = `vibe-status-${process.pid}`;
   const name = `cc-${id}`;
@@ -462,6 +501,33 @@ test('scrollToBottom 把滚到顶的窗格拉回最新输出', { skip: hasTmux ?
     assert.strictEqual(inMode(), '0', 'copy-mode 没退出 = 用户仍然回不到底部');
   } finally {
     spawnSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' });
+  }
+});
+
+test('copy-mode 里写文字到不了程序，先 scrollToBottom 再写才到', { skip: hasTmux ? false : 'tmux 不可用' }, async () => {
+  const sessionId = `vibe-input-${process.pid}`;
+  const name = tmuxName(sessionId);
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const pane = () => spawnSync('tmux', ['capture-pane', '-p', '-t', name], { encoding: 'utf8' }).stdout;
+  const pm = new PtyManager();
+  try {
+    pm.create(sessionId, { cols: 80, rows: 24, command: ['cat'], onData: () => {}, onExit: () => {} });
+    await sleep(800);
+
+    spawnSync('tmux', ['copy-mode', '-t', name], { stdio: 'ignore' });
+    pm.write(sessionId, 'eaten-by-copy-mode');
+    pm.write(sessionId, '\r');
+    await sleep(400);
+    assert.ok(!pane().includes('eaten-by-copy-mode'), '前置条件：copy-mode 会吃掉文字');
+
+    spawnSync('tmux', ['copy-mode', '-t', name], { stdio: 'ignore' });
+    pm.scrollToBottom(sessionId);
+    pm.write(sessionId, 'reaches-program');
+    pm.write(sessionId, '\r');
+    await sleep(400);
+    assert.ok(pane().includes('reaches-program'), '退出 copy-mode 后文字应该到达程序');
+  } finally {
+    pm.destroyWithTmux(sessionId);
   }
 });
 
