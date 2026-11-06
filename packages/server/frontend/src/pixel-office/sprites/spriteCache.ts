@@ -4,10 +4,16 @@ const zoomCaches = new Map<number, WeakMap<SpriteData, HTMLCanvasElement>>()
 
 // ── Outline sprite generation ─────────────────────────────────
 
-const outlineCache = new WeakMap<SpriteData, SpriteData>()
+// 颜色 → (精灵 → 描边)。选中/悬停用白色，「工作中」用主题的黄色，一种颜色一份缓存。
+const outlineCaches = new Map<string, WeakMap<SpriteData, SpriteData>>()
 
-/** Generate a 1px white outline SpriteData (2px larger in each dimension) */
-export function getOutlineSprite(sprite: SpriteData): SpriteData {
+/** Generate a 1px outline SpriteData (2px larger in each dimension)，默认白色 */
+export function getOutlineSprite(sprite: SpriteData, color = '#FFFFFF'): SpriteData {
+  let outlineCache = outlineCaches.get(color)
+  if (!outlineCache) {
+    outlineCache = new WeakMap()
+    outlineCaches.set(color, outlineCache)
+  }
   const cached = outlineCache.get(sprite)
   if (cached) return cached
 
@@ -19,16 +25,16 @@ export function getOutlineSprite(sprite: SpriteData): SpriteData {
     outline.push(new Array<string>(cols + 2).fill(''))
   }
 
-  // For each opaque pixel, mark its 4 cardinal neighbors as white
+  // For each opaque pixel, mark its 4 cardinal neighbors
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       if (sprite[r][c] === '') continue
       const er = r + 1
       const ec = c + 1
-      if (outline[er - 1][ec] === '') outline[er - 1][ec] = '#FFFFFF'
-      if (outline[er + 1][ec] === '') outline[er + 1][ec] = '#FFFFFF'
-      if (outline[er][ec - 1] === '') outline[er][ec - 1] = '#FFFFFF'
-      if (outline[er][ec + 1] === '') outline[er][ec + 1] = '#FFFFFF'
+      if (outline[er - 1][ec] === '') outline[er - 1][ec] = color
+      if (outline[er + 1][ec] === '') outline[er + 1][ec] = color
+      if (outline[er][ec - 1] === '') outline[er][ec - 1] = color
+      if (outline[er][ec + 1] === '') outline[er][ec + 1] = color
     }
   }
 

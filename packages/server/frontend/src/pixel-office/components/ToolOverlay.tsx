@@ -3,7 +3,10 @@ import type { ToolActivity } from '../types.js'
 import type { OfficeState } from '../engine/officeState.js'
 import type { SubagentCharacter } from '../../pixel-hooks/useExtensionMessages.js'
 import { TILE_SIZE, CharacterState } from '../types.js'
-import { TOOL_OVERLAY_VERTICAL_OFFSET, CHARACTER_SITTING_OFFSET_PX } from '../../pixel-constants.js'
+import { CHARACTER_SITTING_OFFSET_PX } from '../../pixel-constants.js'
+
+/** 卡片上沿离脚底多远（世界像素） */
+const TOOL_OVERLAY_FOOT_GAP_PX = 2
 
 interface ToolOverlayProps {
   officeState: OfficeState
@@ -27,7 +30,7 @@ function getActivityText(
     // Find the latest non-done tool
     const activeTool = [...tools].reverse().find((t) => !t.done)
     if (activeTool) {
-      if (activeTool.permissionWait) return 'Needs approval'
+      if (activeTool.permissionWait) return '等你确认'
       return activeTool.status
     }
     // All tools done but agent still active (mid-turn) — keep showing last tool status
@@ -37,7 +40,7 @@ function getActivityText(
     }
   }
 
-  return 'Idle'
+  return '空闲'
 }
 
 export function ToolOverlay({
@@ -57,18 +60,27 @@ export function ToolOverlay({
   //
   // 改成：只有真的有选中/悬停的小人时才跑 rAF；容器尺寸由 ResizeObserver 缓存，
   // 不在渲染里量。
-  const needsFollow = officeState.selectedAgentId !== null || officeState.hoveredAgentId !== null
+  //
+  // 选中/悬停是画布直接写在 officeState 上的（不经过 React），所以「有没有人被悬停」
+  // 不能在渲染时读一次就完事 —— 原来就是这么读的，结果鼠标移到小人身上什么都不出，
+  // 要等别的什么东西碰巧触发一次重渲染（最长 2.5 秒一轮的会话列表）才弹出来。
+  // 这里每帧看一眼这两个 id：变了，或者有人被选中/悬停（卡片要跟着人走），才重渲染。
   const [, setTick] = useState(0)
   useEffect(() => {
-    if (!needsFollow) return undefined
     let rafId = 0
+    let seen = { sel: officeState.selectedAgentId, hov: officeState.hoveredAgentId }
     const tick = () => {
-      setTick((n) => n + 1)
+      const sel = officeState.selectedAgentId
+      const hov = officeState.hoveredAgentId
+      if (sel !== seen.sel || hov !== seen.hov || sel !== null || hov !== null) {
+        seen = { sel, hov }
+        setTick((n) => n + 1)
+      }
       rafId = requestAnimationFrame(tick)
     }
     rafId = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafId)
-  }, [needsFollow])
+  }, [officeState])
 
   const sizeRef = useRef({ width: 0, height: 0 })
   useEffect(() => {
@@ -115,17 +127,17 @@ export function ToolOverlay({
         // Only show for hovered or selected agents
         if (!isSelected && !isHovered) return null
 
-        // Position above character
+        // 挂在脚下：头顶已经有名牌（和气泡）了，原来这张卡片也挂在头顶，三样东西叠成一坨
         const sittingOffset = ch.state === CharacterState.TYPE ? CHARACTER_SITTING_OFFSET_PX : 0
         const screenX = (deviceOffsetX + ch.x * zoom) / dpr
-        const screenY = (deviceOffsetY + (ch.y + sittingOffset - TOOL_OVERLAY_VERTICAL_OFFSET) * zoom) / dpr
+        const screenY = (deviceOffsetY + (ch.y + sittingOffset + TOOL_OVERLAY_FOOT_GAP_PX) * zoom) / dpr
 
         // Get activity text
         const subHasPermission = isSub && ch.bubbleType === 'permission'
         let activityText: string
         if (isSub) {
           if (subHasPermission) {
-            activityText = 'Needs approval'
+            activityText = '等你确认'
           } else {
             const sub = subagentCharacters.find((s) => s.id === id)
             activityText = sub ? sub.label : 'Subtask'
@@ -153,7 +165,7 @@ export function ToolOverlay({
             style={{
               position: 'absolute',
               left: screenX,
-              top: screenY - 24,
+              top: screenY,
               transform: 'translateX(-50%)',
               display: 'flex',
               flexDirection: 'column',
@@ -171,8 +183,8 @@ export function ToolOverlay({
                 border: isSelected
                   ? '2px solid var(--pixel-border-light)'
                   : '2px solid var(--pixel-border)',
-                borderRadius: 0,
-                padding: isSelected ? '3px 6px 3px 8px' : '3px 8px',
+                borderRadius: 4,
+                padding: isSelected ? '2px 4px 2px 7px' : '2px 7px',
                 boxShadow: 'var(--pixel-shadow)',
                 whiteSpace: 'nowrap',
                 maxWidth: 220,
@@ -192,9 +204,10 @@ export function ToolOverlay({
               )}
               <span
                 style={{
-                  fontSize: isSub ? '20px' : '22px',
+                  fontSize: isSub ? '11px' : '11.5px',
                   fontStyle: isSub ? 'italic' : undefined,
                   color: 'var(--vscode-foreground)',
+                  fontFamily: 'var(--pixel-font, system-ui)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                 }}
@@ -214,7 +227,7 @@ export function ToolOverlay({
                     color: 'var(--pixel-close-text)',
                     cursor: 'pointer',
                     padding: '0 2px',
-                    fontSize: '26px',
+                    fontSize: '14px',
                     lineHeight: 1,
                     marginLeft: 2,
                     flexShrink: 0,

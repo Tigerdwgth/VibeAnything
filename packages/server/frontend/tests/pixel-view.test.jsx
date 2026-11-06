@@ -196,15 +196,25 @@ describe('hook 事件不能凭空造小人', () => {
     expect(typesOf('agentToolStart')).toHaveLength(1);
   });
 
-  test('Stop → 收气泡置 idle；Notification → 等待确认', () => {
+  test('Stop → 收气泡置 idle、阶段记为「干完了」；之后的 Notification（idle_prompt）不算等权限', () => {
     render([session({ sessionId: 'cc-one', isRunning: true })]);
     messages.length = 0;
     hook({ hookEvent: 'Stop', machineId: 'macmini', sessionId: 'cc-one' });
     expect(typesOf('agentStatus').map(m => m.status)).toEqual(['idle']);
+    expect(typesOf('agentPhase').map(m => m.phase)).toEqual(['done']);
 
+    // 停下 60 秒后 Claude 会发一条 idle_prompt 通知 —— 它不是权限确认
+    messages.length = 0;
+    hook({ hookEvent: 'Notification', machineId: 'macmini', sessionId: 'cc-one' });
+    expect(messages).toEqual([]);
+  });
+
+  test('干活时收到 Notification（权限确认）→ 等待确认', () => {
+    render([session({ sessionId: 'cc-one', isRunning: true })]);
     messages.length = 0;
     hook({ hookEvent: 'Notification', machineId: 'macmini', sessionId: 'cc-one' });
     expect(typesOf('agentStatus').map(m => m.status)).toEqual(['waiting']);
+    expect(typesOf('agentPhase').map(m => m.phase)).toEqual(['permission']);
   });
 
   test('hook 里的 sessionId 是 claude 的 UUID（和 tmux 名不是一个命名空间）→ 丢掉，不新建小人', () => {
@@ -218,7 +228,7 @@ describe('hook 事件不能凭空造小人', () => {
   });
 
   test('hook 带的是 tmuxSession 时也能认出来', () => {
-    render([session({ sessionId: 'my-dev' })]);
+    render([session({ sessionId: 'my-dev', isRunning: true })]);
     messages.length = 0;
     hook({ hookEvent: 'Stop', machineId: 'macmini', sessionId: 'some-uuid', tmuxSession: 'my-dev' });
     expect(typesOf('agentStatus').map(m => m.status)).toEqual(['idle']);

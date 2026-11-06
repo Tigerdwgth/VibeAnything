@@ -18,26 +18,30 @@ const panelStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 4,
   background: 'var(--pixel-bg)',
-  border: '2px solid var(--pixel-border)',
-  borderRadius: 0,
-  padding: '4px 6px',
+  border: '1px solid var(--pixel-border)',
+  borderRadius: 6,
+  padding: 3,
   boxShadow: 'var(--pixel-shadow)',
 }
 
+// 原版按 VS Code 侧栏里的像素字体定的 24px，换成本应用的无衬线字体后大得刺眼（一颗按钮
+// 比小镇里的人还高），和名牌、会话列表放在一起也不成套，这里统一收成 12px
 const btnBase: React.CSSProperties = {
-  padding: '5px 10px',
-  fontSize: '24px',
+  padding: '4px 10px',
+  fontSize: '12px',
+  fontWeight: 600,
+  fontFamily: 'var(--pixel-font, system-ui)',
   color: 'var(--pixel-text)',
   background: 'var(--pixel-btn-bg)',
-  border: '2px solid transparent',
-  borderRadius: 0,
+  border: '1px solid transparent',
+  borderRadius: 4,
   cursor: 'pointer',
 }
 
 const btnActive: React.CSSProperties = {
   ...btnBase,
   background: 'var(--pixel-active-bg)',
-  border: '2px solid var(--pixel-accent)',
+  border: '1px solid var(--pixel-accent)',
 }
 
 
@@ -73,7 +77,7 @@ export function BottomToolbar({
         }
         title="Edit office layout"
       >
-        Layout
+        布局
       </button>
       <div style={{ position: 'relative' }}>
         <button
@@ -90,7 +94,7 @@ export function BottomToolbar({
           }
           title="Settings"
         >
-          Settings
+          设置
         </button>
         <SettingsModal
           isOpen={isSettingsOpen}

@@ -106,7 +106,8 @@ describe('跟随相机', () => {
     // 与 viewport.ts 同一套算式：地图居中，pan=0
     const offX = Math.floor((SIZE.width * dpr - town.plan.cols * 16 * zoom) / 2);
     const offY = Math.floor((SIZE.height * dpr - town.plan.rows * 16 * zoom) / 2);
-    expect(x).toBe(Math.round((offX + (room.col + room.cols / 2) * 16 * zoom) / dpr));
+    // 贴在第一行的左端（居中会被坐在上排的人的名牌压住）
+    expect(x).toBe(Math.round((offX + (room.col + 0.5) * 16 * zoom) / dpr));
     expect(y).toBe(Math.round((offY + (room.row + 0.5) * 16 * zoom) / dpr));
   });
 

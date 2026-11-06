@@ -52,8 +52,29 @@ export function pixelThemeCss(T) {
   --pixel-agent-border: ${T.border};
   --pixel-agent-text: ${T.textPrimary};
   --pixel-hint-bg: rgba(0,0,0,0.65);
-  --pixel-status-active: ${T.danger};        /* 正在跑（与侧栏红绿灯同义） */
-  --pixel-status-permission: ${T.warning};   /* 等你确认 */
+  --pixel-status-active: ${T.working};       /* 正在跑（与侧栏黄灯同源） */
+  --pixel-status-permission: ${T.danger};    /* 等你确认 */
+
+  /* 会话的工作阶段（名牌、会话列表共用；与侧栏红绿灯同源：黄 = 工作中，绿 = 空闲）。
+     -dim 是同色的浅底，用在名牌/列表行的底色上；主题色都是 6 位十六进制，直接拼透明度 */
+  --pixel-working: ${T.working};
+  --pixel-working-dim: ${T.working}2e;
+  --pixel-idle: ${T.success};
+  --pixel-done: ${T.success};
+  --pixel-done-dim: ${T.success}2e;
+  --pixel-permission: ${T.danger};
+  --pixel-permission-dim: ${T.danger}2e;
+  --pixel-offline: ${T.textMuted};
+
+  /* 名牌与会话列表 */
+  --pixel-font: ${T.fontSans};
+  --pixel-label-bg: ${T.bgCard}eb;
+  --pixel-label-text: ${T.textPrimary};
+  --pixel-label-sub: ${T.textSecondary};
+  --pixel-label-border: ${T.borderHover};
+  --pixel-label-shadow: 0 1px 4px rgba(0,0,0,0.35);
+  --pixel-panel-bg: ${T.bgPanel};
+  --pixel-row-hover: ${T.border};
 
   /* 画布上的暗角：四角压暗一点，让中间的小镇更聚焦 */
   --pixel-vignette: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.35) 100%);
@@ -73,5 +94,16 @@ export function pixelThemeCss(T) {
   --vscode-charts-yellow: ${T.warning};
   --vscode-charts-blue: ${T.accent};
 }
+/* 「工作中」的状态灯：慢呼吸（与侧栏黄灯的 pulse 同一个节奏） */
+@keyframes pixel-phase-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.${PIXEL_SCOPE_CLASS} .pixel-phase-pulse { animation: pixel-phase-pulse 1.5s ease-in-out infinite; }
+/* 会话列表行、名牌的悬停：叠一层浅色，不改各自的底色（等你/工作中的行有自己的浅底） */
+.${PIXEL_SCOPE_CLASS} .pixel-roster-row:hover,
+.${PIXEL_SCOPE_CLASS} .pixel-agent-chip:hover { box-shadow: inset 0 0 0 999px var(--pixel-row-hover); }
+.${PIXEL_SCOPE_CLASS} .pixel-roster-row:focus-visible,
+.${PIXEL_SCOPE_CLASS} .pixel-agent-chip:focus-visible { outline: 2px solid var(--pixel-accent); outline-offset: -2px; }
 `;
 }

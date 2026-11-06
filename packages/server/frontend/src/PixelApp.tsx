@@ -28,6 +28,17 @@ function getOfficeState(): OfficeState {
   return officeStateRef.current
 }
 
+/**
+ * 测试入口：拿到 / 清空模块级的画布状态（与 PixelView 的 __resetPixelViewStateForTest
+ * 同一个路子 —— 画布状态必须是模块级的，代价是单测之间会串）。生产代码不要调它。
+ */
+export function __officeStateForTest(): OfficeState {
+  return getOfficeState()
+}
+export function __resetOfficeStateForTest(): void {
+  officeStateRef.current = null
+}
+
 const actionBarBtnStyle: React.CSSProperties = {
   padding: '4px 10px',
   fontSize: '22px',
@@ -123,7 +134,7 @@ function App() {
 
   const isEditDirty = useCallback(() => editor.isEditMode && editor.isDirty, [editor.isEditMode, editor.isDirty])
 
-  const { agents, selectedAgent, agentTools, agentStatuses, agentInfos, subagentTools, subagentCharacters, layoutReady, layoutVersion, loadedAssets } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty)
+  const { agents, selectedAgent, agentTools, agentStatuses, agentInfos, agentPhases, subagentTools, subagentCharacters, layoutReady, layoutVersion, loadedAssets } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
 
@@ -298,14 +309,16 @@ function App() {
         dimmed={editor.isEditMode}
       />
 
-      {/* 小人头顶的名牌：谁 / 哪台机器 / 在干嘛。编辑模式下不显示 —— 那时在摆家具，
-          一屏名牌只会挡视线。 */}
+      {/* 小人头顶的名牌：谁 / 在干嘛，点名牌 = 点小人（打开它的终端）。
+          编辑模式下不显示 —— 那时在摆家具，一屏名牌只会挡视线。 */}
       {!editor.isEditMode && (
         <AgentLabels
           officeState={officeState}
           agents={agents}
           agentStatuses={agentStatuses}
           agentInfos={agentInfos}
+          agentPhases={agentPhases}
+          onSelect={handleClick}
           containerRef={containerRef}
           zoom={editor.zoom}
           panRef={editor.panRef}

@@ -220,4 +220,18 @@ export interface Character {
   matrixEffectTimer: number
   /** Per-column random seeds (16 values) for staggered rain timing */
   matrixEffectSeeds: number[]
+  /**
+   * 会话的工作阶段（集成层 PixelView 按 isRunning + hook 推下来）。子代理没有这个字段。
+   * 渲染层靠它画「工作中」的描边、决定坐着的人是在打字还是在歇着。
+   */
+  phase?: AgentPhase
 }
+
+/**
+ * 小人对应会话的工作阶段：
+ *  · working    —— agent 正在干活（黄灯）
+ *  · permission —— 卡在权限确认上，等人点同意
+ *  · done       —— 刚干完一轮、在等新的输入，用户还没去看过
+ *  · idle       —— 空闲（绿灯），已经看过或者一开始就闲着
+ */
+export type AgentPhase = 'working' | 'permission' | 'done' | 'idle'

@@ -35,6 +35,17 @@ export function isReadingTool(tool: string | null): boolean {
   return READING_TOOLS.has(tool)
 }
 
+/**
+ * 坐在工位上的人此刻是不是真的在敲键盘。
+ *
+ * 上游只要坐着（TYPE 状态）就播打字帧 —— 而空闲的人闲逛累了会回座位歇 2~4 分钟，
+ * 这段时间看上去和「正在干活」一模一样，小镇上就分不清谁在跑、谁闲着。
+ * 等权限确认时 agent 也是停着的，同样不该打字。
+ */
+export function isTyping(ch: Character): boolean {
+  return ch.isActive && ch.phase !== 'permission'
+}
+
 /** Pixel center of a tile */
 function tileCenter(col: number, row: number): { x: number; y: number } {
   return {
@@ -106,7 +117,11 @@ export function updateCharacter(
 
   switch (ch.state) {
     case CharacterState.TYPE: {
-      if (ch.frameTimer >= TYPE_FRAME_DURATION_SEC) {
+      if (!isTyping(ch)) {
+        // 歇着：定格成坐姿，不播打字帧（见 isTyping）
+        ch.frame = 0
+        ch.frameTimer = 0
+      } else if (ch.frameTimer >= TYPE_FRAME_DURATION_SEC) {
         ch.frameTimer -= TYPE_FRAME_DURATION_SEC
         ch.frame = (ch.frame + 1) % 2
       }
@@ -305,6 +320,8 @@ export function updateCharacter(
 export function getCharacterSprite(ch: Character, sprites: CharacterSprites): SpriteData {
   switch (ch.state) {
     case CharacterState.TYPE:
+      // 歇着的人用「读」那套坐姿（手放两侧、不碰键盘），定格第一帧
+      if (!isTyping(ch)) return sprites.reading[ch.dir][0]
       if (isReadingTool(ch.currentTool)) {
         return sprites.reading[ch.dir][ch.frame % 2]
       }
