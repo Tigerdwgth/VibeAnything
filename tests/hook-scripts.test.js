@@ -67,6 +67,41 @@ test('guard.js 遇到危险命令退出码 2，并在 stderr 给出原因', () =
   }
 });
 
+// 主目录的各种写法：shell 会把 ~ / $HOME / ${HOME} 展开成同一个目录，`/*` 是清空它的内容。
+// 旧代码只认 / 开头的参数，rm -rf ~ 直接放行 —— 而 daemon 起的 claude 带着
+// --dangerously-skip-permissions，这里是唯一一道拦截。
+test('guard.js 拦截主目录与受保护目录的展开写法和 /* 写法', () => {
+  const vibe = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-home-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-user-'));
+  try {
+    for (const command of [
+      'rm -rf ~', 'rm -rf ~/', 'rm -rf $HOME', 'rm -rf "$HOME"', 'rm -rf ${HOME}/',
+      `rm -rf ${home}/*`, 'rm -rf ~/*', 'rm -fr "$HOME"/*', 'rm -rf /usr/*', 'rm -rf /*',
+    ]) {
+      const res = runHook('guard.js', { tool_input: { command } }, { VIBEANYTHING_HOME: vibe, HOME: home });
+      assert.strictEqual(res.status, 2, `${command} 应被拦截`);
+      assert.match(res.stderr, /受保护路径/);
+    }
+  } finally {
+    fs.rmSync(vibe, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('guard.js 放行主目录下的普通子目录', () => {
+  const vibe = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-home-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-user-'));
+  try {
+    for (const command of ['rm -rf ~/proj/build', 'rm -rf "$HOME"/tmp/cache', 'rm -rf ${HOME}/a/*', 'rm -rf build/*']) {
+      const res = runHook('guard.js', { tool_input: { command } }, { VIBEANYTHING_HOME: vibe, HOME: home });
+      assert.strictEqual(res.status, 0, `${command} 不该被拦截: ${res.stderr}`);
+    }
+  } finally {
+    fs.rmSync(vibe, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('guard.js 放行普通命令', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-home-'));
   try {

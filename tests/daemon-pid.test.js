@@ -122,3 +122,35 @@ test('日志超限才转存，且只留一份备份', () => {
 test('没有日志文件时转存是无害的空操作（新机器第一次启动）', () => {
   assert.strictEqual(daemon.rotateLogIfBig(1), false);
 });
+
+// stop 也要先核对 PID：daemon 崩溃时 pid 文件留在原地，PID 被复用后直接 SIGTERM 会杀掉不相干的进程。
+// 两条都用真子进程：一个普通的 sleep 当「复用了 PID 的别人」，一个命令行带 cli.js --daemon 的当 daemon。
+const { spawn } = require('node:child_process');
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+test('stopDaemon：pid 文件指向的进程不是 daemon → 不发信号，只清掉陈旧的 pid 文件', async () => {
+  const bystander = spawn('sleep', ['30'], { stdio: 'ignore' });
+  try {
+    writePidFile(JSON.stringify({ pid: bystander.pid, cmd: 'vibeanything-daemon', startedAt: 1 }));
+    assert.strictEqual(daemon.stopDaemon(), false);
+    await new Promise(r => setTimeout(r, 200));
+    assert.strictEqual(alive(bystander.pid), true, '不相干的进程被 SIGTERM 了');
+    assert.strictEqual(fs.existsSync(daemon.getPidPath()), false);
+  } finally {
+    bystander.kill('SIGKILL');
+  }
+});
+
+test('stopDaemon：确实是 daemon 时照常发 SIGTERM', async () => {
+  const fake = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'fake/bin/cli.js', '--daemon', 'start'], { stdio: 'ignore' });
+  const exited = new Promise(r => fake.once('exit', (code, signal) => r(signal)));
+  try {
+    await new Promise(r => setTimeout(r, 200));
+    writePidFile(JSON.stringify({ pid: fake.pid, cmd: 'vibeanything-daemon', startedAt: 1 }));
+    assert.strictEqual(daemon.stopDaemon(), true);
+    assert.strictEqual(await exited, 'SIGTERM');
+    assert.strictEqual(fs.existsSync(daemon.getPidPath()), false);
+  } finally {
+    fake.kill('SIGKILL');
+  }
+});

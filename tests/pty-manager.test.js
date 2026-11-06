@@ -272,7 +272,7 @@ test('buildSplitWindowArgs maps split directions to tmux flags', () => {
       expected,
       `unexpected tmux flags for ${direction}`
     );
-    assert.strictEqual(args[args.indexOf('-t') + 1], tmuxName('sess-1'));
+    assert.strictEqual(args[args.indexOf('-t') + 1], `=${tmuxName('sess-1')}:`, '目标要精确匹配会话，不能前缀命中别的会话');
     assert.strictEqual(args[args.indexOf('-c') + 1], '/workspace/app');
   }
 });
@@ -392,10 +392,10 @@ test('含空格的工作目录：真 tmux 起会话后确实落在那个目录�
 // 顶栏那五个按钮（↑↓←→ 切焦点 + ✕ 删分屏）打到的就是这两个方法。
 
 test('buildSelectPaneArgs 四个方向映射到 tmux 的 -U/-D/-L/-R', () => {
-  assert.deepStrictEqual(buildSelectPaneArgs('s1', 'up'), ['select-pane', '-t', tmuxName('s1'), '-U']);
-  assert.deepStrictEqual(buildSelectPaneArgs('s1', 'down'), ['select-pane', '-t', tmuxName('s1'), '-D']);
-  assert.deepStrictEqual(buildSelectPaneArgs('s1', 'left'), ['select-pane', '-t', tmuxName('s1'), '-L']);
-  assert.deepStrictEqual(buildSelectPaneArgs('s1', 'right'), ['select-pane', '-t', tmuxName('s1'), '-R']);
+  assert.deepStrictEqual(buildSelectPaneArgs('s1', 'up'), ['select-pane', '-t', `=${tmuxName('s1')}:`, '-U']);
+  assert.deepStrictEqual(buildSelectPaneArgs('s1', 'down'), ['select-pane', '-t', `=${tmuxName('s1')}:`, '-D']);
+  assert.deepStrictEqual(buildSelectPaneArgs('s1', 'left'), ['select-pane', '-t', `=${tmuxName('s1')}:`, '-L']);
+  assert.deepStrictEqual(buildSelectPaneArgs('s1', 'right'), ['select-pane', '-t', `=${tmuxName('s1')}:`, '-R']);
 });
 
 test('buildSelectPaneArgs 拒绝未知方向（别把 split 的标志混进来）', () => {
@@ -406,7 +406,7 @@ test('buildSelectPaneArgs 拒绝未知方向（别把 split 的标志混进来�
 });
 
 test('buildKillPaneArgs 打到当前活动 pane', () => {
-  assert.deepStrictEqual(buildKillPaneArgs('s1'), ['kill-pane', '-t', tmuxName('s1')]);
+  assert.deepStrictEqual(buildKillPaneArgs('s1'), ['kill-pane', '-t', `=${tmuxName('s1')}:`]);
 });
 
 test('killPane 在只剩一个窗格时拒绝（否则等于把整个会话连同进程一起杀掉）', { skip: hasTmux ? false : 'tmux 不可用' }, () => {
@@ -477,7 +477,7 @@ test('selectPane / killPane 对不存在的会话报错', { skip: hasTmux ? fals
 // 而这个功能的全部价值就在于「那个状态真的被清掉了」。
 
 test('buildScrollToBottomArgs 用 copy-mode -q 打到当前活动 pane', () => {
-  assert.deepStrictEqual(buildScrollToBottomArgs('s1'), ['copy-mode', '-q', '-t', tmuxName('s1')]);
+  assert.deepStrictEqual(buildScrollToBottomArgs('s1'), ['copy-mode', '-q', '-t', `=${tmuxName('s1')}:`]);
   // -q 是 cancel（退出模式）。漏掉它就变成「进入 copy-mode」，效果正好相反。
   assert.ok(buildScrollToBottomArgs('s1').includes('-q'), '缺 -q 会变成进入复制模式');
 });
@@ -550,4 +550,97 @@ test('已经在底部时 scrollToBottom 是空操作，不报错', { skip: hasTm
 test('scrollToBottom 对不存在的会话明确报错，而不是静默成功', () => {
   const pm = new PtyManager();
   assert.throws(() => pm.scrollToBottom(`vibe-nope-${process.pid}`), /tmux session not found/);
+});
+
+// ── 会话名精确匹配 ──
+// tmux 的 -t 默认按「精确 → 前缀 → 通配」找会话。下面每条都是「目标会话已经不在了，
+// 但另一个会话的名字以它开头」：旧代码会把操作落到那个会话上（实测删掉过期的 test 杀掉了 test2）。
+// 清理一律用 `=名字`，测试自己的 kill-session 也不能前缀误杀。
+
+const tmuxExact = (...args) => spawnSync('tmux', args, { encoding: 'utf8' });
+const sessionAlive = (name) => tmuxExact('has-session', '-t', `=${name}`).status === 0;
+const killExact = (name) => tmuxExact('kill-session', '-t', `=${name}`);
+
+test('精确匹配：tmuxName 不会把不存在的 test 解析成 test2', { skip: hasTmux ? false : 'tmux 不可用' }, () => {
+  const stale = `vibe-pfx${process.pid}`;
+  const other = `${stale}2`;
+  killExact(other);
+  tmuxExact('new-session', '-d', '-s', other, 'sleep 600');
+  try {
+    assert.strictEqual(tmuxName(stale), `cc-${stale}`, '会话不存在时要套 cc- 前缀，不能借用 test2 的名字');
+    assert.strictEqual(tmuxName(other), other);
+  } finally {
+    killExact(other);
+  }
+});
+
+test('精确匹配：删掉过期的 test 不会杀掉 test2', { skip: hasTmux ? false : 'tmux 不可用' }, () => {
+  const stale = `vibe-pfx${process.pid}`;
+  const other = `${stale}2`;
+  killExact(other);
+  tmuxExact('new-session', '-d', '-s', other, 'sleep 600');
+  const pm = new PtyManager();
+  try {
+    pm.destroyWithTmux(stale);
+    assert.ok(sessionAlive(other), 'destroyWithTmux(test) 杀掉了 test2');
+  } finally {
+    killExact(other);
+  }
+});
+
+test('精确匹配：打开 api 新建自己的 cc-api，不会 attach 进 cc-api-server', { skip: hasTmux ? false : 'tmux 不可用' }, async () => {
+  const id = `vibe-api${process.pid}`;
+  const other = `cc-${id}-server`;
+  killExact(other);
+  killExact(`cc-${id}`);
+  tmuxExact('new-session', '-d', '-s', other, 'sleep 600');
+  const pm = new PtyManager();
+  try {
+    const { isNew } = pm.create(id, { cols: 80, rows: 24, command: ['sleep', '600'], onData: () => {} });
+    assert.strictEqual(isNew, true, 'cc-api 不存在，必须新建');
+    assert.ok(sessionAlive(`cc-${id}`));
+    await waitFor(() => tmuxExact('list-clients', '-t', `=cc-${id}`, '-F', 'x').stdout.trim() !== '');
+    assert.strictEqual(tmuxExact('list-clients', '-t', `=${other}`, '-F', 'x').stdout.trim(), '',
+      'dashboard 的 attach 客户端落进了 cc-api-server');
+  } finally {
+    pm.destroyAll();
+    killExact(`cc-${id}`);
+    killExact(other);
+  }
+});
+
+test('精确匹配：分屏 / 切焦点 / 删分屏 / 回到底部 打到过期会话时报错，不碰 test2', { skip: hasTmux ? false : 'tmux 不可用' }, () => {
+  const stale = `vibe-pfx${process.pid}`;
+  const other = `${stale}2`;
+  killExact(other);
+  tmuxExact('new-session', '-d', '-s', other, 'sleep 600');
+  tmuxExact('split-window', '-t', `=${other}:`, 'sleep 600');
+  const pm = new PtyManager();
+  try {
+    assert.throws(() => pm.split(stale, { direction: 'down' }), /tmux session not found/);
+    assert.throws(() => pm.selectPane(stale, { direction: 'up' }), /tmux session not found/);
+    assert.throws(() => pm.killPane(stale), /tmux session not found/);
+    assert.throws(() => pm.scrollToBottom(stale), /tmux session not found/);
+    assert.strictEqual(tmuxPaneCount(other), 2, 'test2 的窗格数被改动了');
+  } finally {
+    killExact(other);
+  }
+});
+
+test('精确匹配：改名成已有会话名的前缀不再误报重名', { skip: hasTmux ? false : 'tmux 不可用' }, () => {
+  const src = `vibe-rnsrc${process.pid}`;
+  const target = `vibe-pfx${process.pid}`;
+  const other = `${target}2`;
+  for (const n of [src, other, target]) killExact(n);
+  tmuxExact('new-session', '-d', '-s', src, 'sleep 600');
+  tmuxExact('new-session', '-d', '-s', other, 'sleep 600');
+  const pm = new PtyManager();
+  try {
+    const r = pm.renameTmuxSession(src, target);
+    assert.deepStrictEqual(r, { ok: true, newTmuxName: target });
+    assert.ok(sessionAlive(target));
+    assert.ok(sessionAlive(other));
+  } finally {
+    for (const n of [src, other, target]) killExact(n);
+  }
 });

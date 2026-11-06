@@ -48,9 +48,8 @@ function runWorker() {
     const hookEvent = process.env.VIBE_HOOK_EVENT;
     const sessionId = process.env.VIBE_SESSION_ID || '';
     const { getMachineId } = require('../lib/config');
-    const { getIpcDir } = require('../lib/ipc');
-    const ipcDir = getIpcDir();
-    fs.mkdirSync(ipcDir, { recursive: true });
+    const { ensureIpcDir } = require('../lib/ipc');
+    const ipcDir = ensureIpcDir();
     const timestamp = Number(process.env.VIBE_HOOK_TS);
     const evtFile = path.join(ipcDir, `evt-${timestamp}-${process.pid}.json`);
     const tmpFile = `${evtFile}.tmp`;
@@ -62,6 +61,8 @@ function runWorker() {
       tmuxSession,
       machineId: getMachineId(),
       cwd: process.env.VIBE_CWD || process.cwd(),
+      // 等权限（permission_prompt）还是干完了等输入（idle_prompt）：灯都是绿的，像素小镇要区分
+      notificationType: process.env.VIBE_NOTIFICATION_TYPE || undefined,
       timestamp,
     }));
     fs.renameSync(tmpFile, evtFile);   // 原子落盘：daemon 轮询不会读到写了一半的文件
@@ -91,6 +92,7 @@ async function main() {
       VIBE_HOOK_TS: String(firedAt),
       VIBE_SESSION_ID: data.session_id || '',
       VIBE_CWD: data.cwd || '',
+      VIBE_NOTIFICATION_TYPE: data.notification_type || '',
     },
   });
   child.unref();

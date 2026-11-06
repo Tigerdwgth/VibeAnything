@@ -11,55 +11,28 @@ const { addStatusHandlers, CLAUDE_STATUS_EVENTS, installStatusHooks, removeStatu
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q) => new Promise((r) => rl.question(q, r));
 
-// ---- crontab 自启动管理 ----
-const CRONTAB_MARKER = '# vibeanything-daemon';
+// ---- crontab 自启动管理（行的生成与增删在 lib/crontab.js，带单测）----
+const {
+  CRONTAB_MARKER, buildCrontabLines: buildCrontabLinesFor, stripOurCrontabLines, crontabWithOurLines,
+  readCrontab, writeCrontab,
+} = require('../lib/crontab');
 
 function buildCrontabLines() {
-  const nodePath = process.execPath;
-  const cliPath = __filename;
-  const { getBaseDir } = require('../lib/config');
-  const logPath = path.join(getBaseDir(), 'daemon.log');
-  // 如果设置了自定义 VIBEANYTHING_HOME 则注入环境变量
-  const envPrefix = process.env.VIBEANYTHING_HOME
-    ? `VIBEANYTHING_HOME=${process.env.VIBEANYTHING_HOME} `
-    : '';
-  const cmd = `${envPrefix}${nodePath} ${cliPath} --daemon start >> ${logPath} 2>&1`;
-  // 用量上报走同一份 crontab，落在 17 分而不是整点：整点是各种定时任务的高峰，
-  // ccusage 要全量扫 jsonl，错开能避免和别的活儿抢磁盘。
-  const usageLog = path.join(getBaseDir(), 'usage-report.log');
-  const usageCmd = `${envPrefix}${nodePath} ${cliPath} --usage-report >> ${usageLog} 2>&1`;
-  return [
-    CRONTAB_MARKER,
-    `@reboot ${cmd}`,
-    `*/5 * * * * ${cmd}`,
-    `17 * * * * ${usageCmd}`,
-  ];
-}
-
-function readCrontab() {
-  const { execSync } = require('node:child_process');
-  try {
-    return execSync('crontab -l 2>/dev/null', { encoding: 'utf-8' });
-  } catch {
-    return '';
-  }
-}
-
-function writeCrontab(content) {
-  const { execFileSync } = require('node:child_process');
-  execFileSync('crontab', ['-'], { input: content });
+  return buildCrontabLinesFor({
+    nodePath: process.execPath,
+    cliPath: __filename,
+    baseDir: getBaseDir(),
+    vibeHome: process.env.VIBEANYTHING_HOME,
+  });
 }
 
 function installCrontab() {
-  const existing = readCrontab();
-  if (existing.includes(CRONTAB_MARKER)) {
+  const content = crontabWithOurLines(readCrontab(), buildCrontabLines());
+  if (content === null) {
     console.log('⚠️  crontab 中已有 vibeanything 条目，跳过（可先 --crontab remove 再重装）');
     return false;
   }
-  const lines = buildCrontabLines();
-  const newContent = existing.trimEnd() + '\n' + lines.join('\n') + '\n';
-  writeCrontab(newContent);
-  const { getBaseDir } = require('../lib/config');
+  writeCrontab(content);
   console.log('✅ crontab 已安装:');
   console.log(`  @reboot      — 开机自动启动 daemon`);
   console.log(`  */5 * * * *  — 每5分钟检查，崩溃后自动拉起`);
@@ -74,19 +47,33 @@ function removeCrontab() {
     console.log('crontab 中无 vibeanything 条目');
     return false;
   }
-  // 过滤掉 marker 行及紧随的 crontab 行（以 @reboot 或 */5 开头）
-  const filtered = existing
-    .split('\n')
-    .filter(line => !line.includes(CRONTAB_MARKER) && !line.includes('--daemon start'))
-    .join('\n');
-  writeCrontab(filtered);
+  // 连同每小时用量上报那行一起摘掉（从前只删 daemon 两行，上报卸完还在跑）
+  writeCrontab(stripOurCrontabLines(existing));
   console.log('✅ crontab 条目已移除');
   return true;
+}
+
+/**
+ * 读 ~/.claude/settings.json。解析失败直接中止：向导最后会整文件写回，
+ * 从前在这里把解析失败当成 {}，用户一处语法错误就换来整份设置（权限、env、模型）被清空。
+ */
+function readClaudeSettingsOrExit(file) {
+  if (!fs.existsSync(file)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+  } catch (e) {
+    console.error(`❌ ${file} 不是合法的 JSON（${e.message}），先修好它再运行向导；本次未做任何改动。`);
+    process.exit(1);
+  }
 }
 
 async function main() {
   console.log('\n🔔 vibeanything 安装向导\n');
   console.log('本工具为 Claude Code 配置 hooks，并接入 Web Dashboard。\n');
+
+  // 先读 settings：读不了就在提问、写配置、复制脚本之前中止，不留半套安装
+  const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  const claudeSettings = readClaudeSettingsOrExit(claudeSettingsPath);
 
   const config = defaultConfig();
 
@@ -156,12 +143,7 @@ async function main() {
   }
   console.log(`✅ Hook 脚本已安装到 ${hooksDir}`);
 
-  // 5. 注入 hooks 到 ~/.claude/settings.json
-  const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-  let claudeSettings = {};
-  if (fs.existsSync(claudeSettingsPath)) {
-    try { claudeSettings = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf-8')); } catch {}
-  }
+  // 5. 注入 hooks 到 ~/.claude/settings.json（开头已读入）
   if (!claudeSettings.hooks) claudeSettings.hooks = {};
 
   const hooksBase = getHooksDir();
@@ -181,10 +163,7 @@ async function main() {
 
   if (config.hooks.guard) {
     if (!claudeSettings.hooks.PreToolUse) claudeSettings.hooks.PreToolUse = [];
-    const existingGuard = claudeSettings.hooks.PreToolUse.find(h =>
-      h.matcher === 'Bash' && h.hooks?.some(hh => hh.command?.includes('guard.js'))
-    );
-    if (!existingGuard) {
+    if (!hasHookScript(claudeSettings.hooks.PreToolUse, 'guard.js')) {
       claudeSettings.hooks.PreToolUse.push({
         matcher: 'Bash',
         hooks: [{ type: 'command', command: nodeCmd('guard.js') }]
@@ -194,10 +173,7 @@ async function main() {
 
   if (config.hooks.formatPython) {
     if (!claudeSettings.hooks.PostToolUse) claudeSettings.hooks.PostToolUse = [];
-    const existingFmt = claudeSettings.hooks.PostToolUse.find(h =>
-      h.hooks?.some(hh => hh.command?.includes('format-python'))
-    );
-    if (!existingFmt) {
+    if (!hasHookScript(claudeSettings.hooks.PostToolUse, 'format-python.sh')) {
       claudeSettings.hooks.PostToolUse.push({
         matcher: 'Edit|Write',
         hooks: [{ type: 'command', command: shCmd('format-python.sh') }]
@@ -207,10 +183,7 @@ async function main() {
 
   if (config.hooks.codeReview) {
     if (!claudeSettings.hooks.PreToolUse) claudeSettings.hooks.PreToolUse = [];
-    const existingReview = claudeSettings.hooks.PreToolUse.find(h =>
-      h.hooks?.some(hh => hh.command?.includes('code-review'))
-    );
-    if (!existingReview) {
+    if (!hasHookScript(claudeSettings.hooks.PreToolUse, 'code-review.sh')) {
       claudeSettings.hooks.PreToolUse.push({
         matcher: 'Bash',
         hooks: [{ type: 'command', command: shCmd('code-review.sh') }]
@@ -220,10 +193,7 @@ async function main() {
 
   if (config.hooks.fixWritePath) {
     if (!claudeSettings.hooks.PreToolUse) claudeSettings.hooks.PreToolUse = [];
-    const existingFix = claudeSettings.hooks.PreToolUse.find(h =>
-      h.hooks?.some(hh => hh.command?.includes('fix-write-path.js'))
-    );
-    if (!existingFix) {
+    if (!hasHookScript(claudeSettings.hooks.PreToolUse, 'fix-write-path.js')) {
       claudeSettings.hooks.PreToolUse.push({
         matcher: 'Write',
         hooks: [{ type: 'command', command: nodeCmd('fix-write-path.js') }]
@@ -233,7 +203,7 @@ async function main() {
 
   // 会话工作状态上报（黄灯/绿灯）。必须带 async:true，否则同步 hook 会拖慢 Claude。
   if (config.hooks.status) {
-    addStatusHandlers(claudeSettings.hooks, CLAUDE_STATUS_EVENTS, nodeCmd('status.js'));
+    addStatusHandlers(claudeSettings.hooks, CLAUDE_STATUS_EVENTS, path.join(hooksBase, 'status.js'));
   }
 
   fs.mkdirSync(path.dirname(claudeSettingsPath), { recursive: true });

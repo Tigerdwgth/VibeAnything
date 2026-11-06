@@ -11,6 +11,20 @@ const PROTECTED_PATHS = [
 ];
 
 /**
+ * 把 rm 的一个参数还原成 shell 实际会删的路径：去掉引号，展开开头的 ~ / $HOME / ${HOME}。
+ * 只认绝对路径，相对路径（rm -rf build）不在拦截范围内，返回 null。
+ * 末尾的 `/*` 表示删目录里的全部内容，按删这个目录本身处理（rm -rf ~/* 等于清空主目录）。
+ */
+function targetPath(token) {
+  const home = os.homedir();
+  const unquoted = token.replace(/["']/g, '');
+  const expanded = unquoted.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, home);
+  if (!expanded.startsWith('/')) return null;
+  const dir = expanded.endsWith('/*') ? expanded.slice(0, -2) : expanded;
+  return dir.replace(/\/+$/, '') || '/';
+}
+
+/**
  * 判断 rm -rf 是否危险：只有删除系统目录或用户主目录才拦截
  * 普通的 rm -rf some_dir 放行
  */
@@ -26,10 +40,7 @@ function isDangerousRm(command) {
     const tokens = part.split(/\s+/);
     for (const token of tokens) {
       if (token === 'rm' || token.startsWith('-')) continue;
-      // 解析路径
-      const resolved = token.startsWith('/')
-        ? token.replace(/\/+$/, '') || '/'
-        : null;
+      const resolved = targetPath(token);
       if (!resolved) continue;
       // 检查是否是受保护路径或其父路径
       for (const p of PROTECTED_PATHS) {

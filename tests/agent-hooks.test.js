@@ -96,6 +96,13 @@ describe('status.js 真实执行', () => {
     assert.strictEqual(evt.heartbeat, false);
   });
 
+  test('Notification 带上子类型，浏览器靠它区分「等你确认」和「干完了等输入」', async () => {
+    await run(JSON.stringify({ hook_event_name: 'Notification', notification_type: 'permission_prompt', session_id: 'abc', cwd: '/w' }));
+    const evt = await waitForEvent();
+    assert.strictEqual(evt.hookState, 'done');
+    assert.strictEqual(evt.notificationType, 'permission_prompt');
+  });
+
   test('不在 tmux 里的批量任务不上报（否则浏览器每次 Stop 都响提示音）', async () => {
     await run(JSON.stringify({ hook_event_name: 'Stop', session_id: 'exec', cwd: '/w' }), {});
     await new Promise(r => setTimeout(r, 500));
@@ -122,7 +129,7 @@ describe('安装器', () => {
       model: 'x',
       hooks: { Stop: [
         { hooks: [{ type: 'command', command: 'mine.py' }] },
-        { hooks: [{ type: 'command', command: 'node /old/hooks/status.js', async: true }] },
+        { hooks: [{ type: 'command', command: 'node "/repo dir/hooks/status.js"', async: true }] },
       ] },
     }));
     assert.strictEqual(installClaude({ home, statusScript }).added, CLAUDE_STATUS_EVENTS.length - 1);
@@ -132,6 +139,16 @@ describe('安装器', () => {
     assert.strictEqual(settings.hooks.Stop.length, 2);
     assert.strictEqual(settings.hooks.PreToolUse[0].hooks[0].command, 'node "/repo dir/hooks/status.js"');
     assert.strictEqual(settings.hooks.PreToolUse[0].hooks[0].async, true);
+  });
+
+  test('Claude：用户自己名字里带 status.js 的 hook 不会让我们的被跳过', () => {
+    fs.mkdirSync(path.join(home, '.claude'));
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: 'node /Users/me/tools/git-status.js' }] }] },
+    }));
+    assert.strictEqual(installClaude({ home, statusScript }).added, CLAUDE_STATUS_EVENTS.length);
+    const settings = readJson('.claude', 'settings.json');
+    assert.strictEqual(settings.hooks.Stop.length, 2, '用户的 hook 保留，我们的补上');
   });
 
   test('Codex：SessionEnd 必须同步（否则 Codex 报告警），其余异步', () => {
@@ -148,10 +165,12 @@ describe('安装器', () => {
     const hooksFile = path.join(codexHome, 'hooks.json');
     const config = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
     config.hooks.Stop.push({ hooks: [{ type: 'command', command: 'user-own-hook.sh' }] });
+    // 别人的脚本也叫 status.js：不在我们的目录下，不能被顺手信任
+    config.hooks.Stop.push({ hooks: [{ type: 'command', command: 'node /elsewhere/hooks/status.js' }] });
     fs.writeFileSync(hooksFile, JSON.stringify(config));
 
-    assert.strictEqual(await trustCodexStatusHooks({ home }), CODEX_STATUS_EVENTS.length);
-    assert.strictEqual(await trustCodexStatusHooks({ home }), 0);
+    assert.strictEqual(await trustCodexStatusHooks({ home, statusScript }), CODEX_STATUS_EVENTS.length);
+    assert.strictEqual(await trustCodexStatusHooks({ home, statusScript }), 0);
     assert.strictEqual(fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8').match(/trusted_hash/g).length, CODEX_STATUS_EVENTS.length);
   });
 
@@ -168,12 +187,13 @@ describe('安装器', () => {
     const hooksFile = path.join(home, '.codex', 'hooks.json');
     const config = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
     config.hooks.Stop.push({ hooks: [{ type: 'command', command: 'user-own-hook.sh' }] });
+    config.hooks.Stop.push({ hooks: [{ type: 'command', command: 'node /elsewhere/hooks/status.js' }] });
     fs.writeFileSync(hooksFile, JSON.stringify(config));
 
-    removeStatusHooks({ home });
+    removeStatusHooks({ home, statusScript });
     const { hooks } = readJson('.codex', 'hooks.json');
     assert.deepStrictEqual(Object.keys(hooks), ['Stop']);
-    assert.strictEqual(hooks.Stop[0].hooks[0].command, 'user-own-hook.sh');
+    assert.deepStrictEqual(hooks.Stop.map(g => g.hooks[0].command), ['user-own-hook.sh', 'node /elsewhere/hooks/status.js']);
     assert.strictEqual(fs.existsSync(file), false);
   });
 });
