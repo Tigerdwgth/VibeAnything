@@ -1,97 +1,104 @@
 #!/usr/bin/env node
-// hooks/status.js —— 上报会话运行状态（红绿灯），由 Claude Code hooks 驱动
+// hooks/status.js —— 上报会话工作状态（黄灯 = 正在工作，绿灯 = 空闲）
 //
-// 绑定两个事件：
-//   UserPromptSubmit（用户提交 prompt，开始运行）→ hookState: 'running'（红灯=运行中）
-//   Stop（Claude 完成一整轮响应）            → hookState: 'done'（绿灯=空闲）
+// Claude Code 和 Codex 的 hook 直接调用本脚本，OpenCode 由插件 opencode-status.mjs 转调。
+// 三家的 stdin 都带 hook_event_name / session_id / cwd。
 //
-// 仅写一个 evt-*.json 到 IPC 目录，daemon 轮询后转发给浏览器更新红绿灯。
-//
-// 【绝不阻塞 Claude】UserPromptSubmit 是同步阻塞 hook（即使配 async:true，为稳妥也不依赖它）。
-// 本脚本读完 stdin 后，把「写 evt + 查 tmux 名」这些可能耗时的活儿 fork 到一个 detached
-// 后台进程里干，父进程立即 exit 0。这样 Claude 最多只等「fork+exit」一瞬间，绝不会卡。
-//   - stdout 必须保持干净（空）：UserPromptSubmit 的 stdout 会被当 JSON 解析/注入 prompt，
-//     输出任何非 JSON 内容都会出问题。本脚本不往 stdout 写任何东西。
-//   - 所有错误吞掉，绝不影响 Claude 对话。
+// 【绝不阻塞 agent】读完 stdin 后把「查 tmux 名 + 写 evt」fork 到 detached 后台进程，父进程立即退出。
+// stdout 必须保持干净：部分事件的 stdout 会被当作 JSON 解析或注入上下文。所有错误吞掉。
 
 const { spawn } = require('node:child_process');
 
-// 把 hook 事件名映射成红绿灯状态
-function hookStateFor(hookEvent) {
-  if (hookEvent === 'UserPromptSubmit') return 'running'; // 开始运行
-  if (hookEvent === 'Stop') return 'done';                // 完成一轮，空闲
-  return null;                                            // 其他事件不处理
+const RUNNING_EVENTS = new Set(['UserPromptSubmit']);
+// 工具调用当心跳：daemon 重启丢了内存状态、或权限确认放行后，靠它们恢复黄灯。
+const HEARTBEAT_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure']);
+const DONE_EVENTS = new Set(['Stop', 'StopFailure', 'Interrupt', 'SessionEnd', 'PermissionRequest']);
+// 这几种通知说明 agent 在等人，其余通知（如 auth_success）不代表状态变化。
+const WAITING_NOTIFICATIONS = new Set(['permission_prompt', 'idle_prompt', 'elicitation_dialog']);
+
+/** 把 hook 事件映射成灯的状态；与灯无关的事件返回 null。 */
+function hookStateFor(hookEvent, data = {}) {
+  // 子代理的事件不代表主线状态：后台子代理在主线结束后触发 PreToolUse 会把灯错误点亮。
+  if (data.agent_id) return null;
+  if (RUNNING_EVENTS.has(hookEvent) || HEARTBEAT_EVENTS.has(hookEvent)) return 'running';
+  if (DONE_EVENTS.has(hookEvent)) return 'done';
+  if (hookEvent === 'Notification' && WAITING_NOTIFICATIONS.has(data.notification_type)) return 'done';
+  return null;
 }
 
-// 后台子进程真正干活：查 tmux 名 + 写 evt-*.json。被父进程 detached spawn 调起。
-// 通过环境变量传数据（避免再读 stdin）。
+// 所在 tmux 会话名，用于匹配 dashboard 列表。必须用 TMUX_PANE 指明窗格，否则多客户端时可能解析到别的会话。
+function currentTmuxSession() {
+  if (!process.env.TMUX) return '';
+  const { spawnSync } = require('node:child_process');
+  const args = ['display-message', '-p'];
+  if (process.env.TMUX_PANE) args.push('-t', process.env.TMUX_PANE);
+  const r = spawnSync('tmux', [...args, '#S'], { encoding: 'utf8', timeout: 2000 });
+  return r.status === 0 ? (r.stdout || '').trim() : '';
+}
+
+// 后台 worker：数据由父进程经环境变量传入。
 function runWorker() {
   try {
     const fs = require('node:fs');
     const path = require('node:path');
-    const { spawnSync } = require('node:child_process');
-
-    const hookEvent = process.env.VIBE_HOOK_EVENT || '';
-    const hookState = hookStateFor(hookEvent);
-    if (!hookState) return;
+    // Dashboard 只列 tmux 会话。不在 tmux 里的多是 `codex exec` 这类批量任务，
+    // 它们的灯没地方显示，转发过去只会让浏览器不停响提示音。
+    const tmuxSession = currentTmuxSession();
+    if (!tmuxSession) return;
+    const hookEvent = process.env.VIBE_HOOK_EVENT;
     const sessionId = process.env.VIBE_SESSION_ID || '';
-    const cwd = process.env.VIBE_CWD || process.cwd();
-
-    // 所在 tmux 会话名（继承 $TMUX），用于匹配 dashboard 列表里以 tmux 名作 sessionId 的会话
-    let tmuxSession = '';
-    if (process.env.TMUX) {
-      try {
-        const r = spawnSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8', timeout: 2000 });
-        if (r.status === 0) tmuxSession = (r.stdout || '').trim();
-      } catch {}
-    }
-
     const { getMachineId } = require('../lib/config');
-    const machineId = getMachineId();
     const { getIpcDir } = require('../lib/ipc');
     const ipcDir = getIpcDir();
     fs.mkdirSync(ipcDir, { recursive: true });
-    const evtFile = path.join(ipcDir, `evt-${Date.now()}-${sessionId.slice(0, 8)}.json`);
-    fs.writeFileSync(evtFile, JSON.stringify({
-      hookEvent, hookState, sessionId, tmuxSession, machineId, cwd, timestamp: Date.now(),
+    const timestamp = Number(process.env.VIBE_HOOK_TS);
+    const evtFile = path.join(ipcDir, `evt-${timestamp}-${process.pid}.json`);
+    const tmpFile = `${evtFile}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify({
+      hookEvent,
+      hookState: process.env.VIBE_HOOK_STATE,
+      heartbeat: HEARTBEAT_EVENTS.has(hookEvent),
+      sessionId,
+      tmuxSession,
+      machineId: getMachineId(),
+      cwd: process.env.VIBE_CWD || process.cwd(),
+      timestamp,
     }));
+    fs.renameSync(tmpFile, evtFile);   // 原子落盘：daemon 轮询不会读到写了一半的文件
   } catch { /* 后台进程，任何错误都吞掉 */ }
 }
 
-// 父进程（hook 主入口）：读 stdin → fork detached worker → 立即 exit 0
 async function main() {
+  // 在 hook 触发时取时间：异步 worker 落盘先后不固定，daemon 靠它丢弃迟到的旧事件。
+  const firedAt = Date.now();
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
 
   let data = {};
-  try { data = JSON.parse(input); } catch { /* stdin 可能为空 */ }
+  try { data = JSON.parse(input); } catch { return; }
 
   const hookEvent = data.hook_event_name || '';
-  if (!hookStateFor(hookEvent)) return; // 非状态事件，啥也不干，立即退出
+  const hookState = hookStateFor(hookEvent, data);
+  if (!hookState) return;
 
-  // 把数据通过 env 传给 detached 后台 worker，父进程不等它，立即返回
   const child = spawn(process.execPath, [__filename, '--worker'], {
     detached: true,
     stdio: 'ignore',
     env: {
       ...process.env,
       VIBE_HOOK_EVENT: hookEvent,
+      VIBE_HOOK_STATE: hookState,
+      VIBE_HOOK_TS: String(firedAt),
       VIBE_SESSION_ID: data.session_id || '',
       VIBE_CWD: data.cwd || '',
     },
   });
-  child.unref(); // 不等子进程，父进程可以立即退出
+  child.unref();
 }
 
 module.exports = { hookStateFor };
 
 if (require.main === module) {
-  if (process.argv.includes('--worker')) {
-    // 后台 worker：直接干活（查 tmux 名 + 写 evt），干完自然退出
-    runWorker();
-  } else {
-    // hook 主入口：读 stdin → fork detached worker → 立即退出。
-    // 不往 stdout/stderr 写任何东西（UserPromptSubmit 对 stdout 敏感）。
-    main().catch(() => {});
-  }
+  if (process.argv.includes('--worker')) runWorker();
+  else main().catch(() => {});
 }

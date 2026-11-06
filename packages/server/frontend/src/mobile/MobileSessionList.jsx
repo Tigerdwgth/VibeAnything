@@ -9,6 +9,7 @@ import {
 import useFolderCollapse from '../useFolderCollapse';
 import SessionSharing from '../SessionSharing';
 import { MobileActionSheet, MobilePromptSheet } from './MobileSheet';
+import { sessionLightStyle, sessionLightTitle } from '../session-light';
 import {
   getRunningSessionTitle, getRunningSessionDetail, getRunningSessionCommand,
 } from '../session-list-utils';
@@ -203,7 +204,7 @@ function FolderRow({ node, depth, collapsed, onToggle, onMenu, T }) {
       {collapsed && running && (
         <span style={{
           width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0,
-          background: T.danger, boxShadow: `0 0 5px ${T.danger}`,
+          ...sessionLightStyle(T, true, 5),
         }} />
       )}
       <span style={{ color: T.textMuted, fontSize: '0.72rem', flexShrink: 0 }}>{total}</span>
@@ -232,14 +233,11 @@ function SessionRow({ session, machineId, depth, isOpen, isActive, onOpen, onClo
         borderLeft: `3px solid ${isActive ? T.accent : 'transparent'}`,
       }}
     >
-      {/* 红绿灯：isRunning=true → 红（Claude 正在跑），false → 绿（空闲）。
-          完全由开发机侧的 hook 驱动，与桌面版同一个字段。 */}
       <span
-        title={session.isRunning ? '运行中' : '空闲'}
+        title={sessionLightTitle(session.isRunning)}
         style={{
           width: '9px', height: '9px', borderRadius: '50%', flexShrink: 0,
-          background: session.isRunning ? T.danger : T.success,
-          boxShadow: `0 0 5px ${session.isRunning ? T.danger : T.success}`,
+          ...sessionLightStyle(T, session.isRunning, 5),
         }}
       />
       <div style={{ flex: 1, minWidth: 0 }}>

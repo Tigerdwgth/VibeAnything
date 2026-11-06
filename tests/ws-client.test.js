@@ -1,6 +1,6 @@
 const assert = require('node:assert');
-const { test } = require('node:test');
-const { WsClient, scanSessionHistory, resolveIsRunning } = require('../lib/ws-client');
+const { describe, test } = require('node:test');
+const { WsClient, scanSessionHistory, resolveIsRunning, HOOK_SILENCE_LIMIT_MS } = require('../lib/ws-client');
 
 function createClient(ptyManager) {
   const client = new WsClient({
@@ -108,6 +108,66 @@ test('updateHookState 更新内存 Map 并在状态变化时触发 active_sessio
   assert.strictEqual(sendCount, 2);
   client.updateHookState('', 'running');
   assert.strictEqual(sendCount, 2);
+});
+
+test('cc- 开头的 tmux 会话：hook 登记的名字要能匹配列表里去掉前缀的 sessionId', () => {
+  const client = createClient({});
+  client._sendActiveSessions = () => {};
+  client.updateHookState('uuid-not-in-list', 'running', 'cc-new-claude-1');
+  assert.strictEqual(client._computeIsRunning('new-claude-1'), true);
+  assert.strictEqual(client._computeIsRunning('cc-new-claude-1'), true);
+});
+
+test('迟到的旧事件不能盖掉新状态（异步 hook 落盘顺序不固定）', () => {
+  const client = createClient({});
+  client._sendActiveSessions = () => {};
+  client.updateHookState('s', 'done', 'tm', 2000);
+  client.updateHookState('s', 'running', 'tm', 1000);
+  assert.strictEqual(client._computeIsRunning('s', 2000), false);
+  client.updateHookState('s', 'running', 'tm', 3000);
+  assert.strictEqual(client._computeIsRunning('s', 3000), true);
+});
+
+describe('窗格静默判定', () => {
+  const T0 = 1_000_000;
+  const setup = (activityMs) => {
+    const client = createClient({});
+    client._sendActiveSessions = () => {};
+    client._readTmuxActivity = () => new Map([['tm', activityMs]]);
+    client.updateHookState('s', 'running', 'tm', T0);
+    return client;
+  };
+
+  test('长工具调用期间没有 hook，但窗格还在刷新：保持黄灯', () => {
+    const now = T0 + 10 * HOOK_SILENCE_LIMIT_MS;
+    const client = setup(now - 1000);
+    client._expireSilentHooks(now);
+    assert.strictEqual(client._computeIsRunning('s', now), true);
+  });
+
+  test('Esc 打断没有结束事件，窗格静默超限后转绿', () => {
+    const client = setup(T0);
+    const now = T0 + HOOK_SILENCE_LIMIT_MS + 1;
+    client._expireSilentHooks(now);
+    assert.strictEqual(client._computeIsRunning('s', now), false);
+  });
+
+  test('转绿后 attach 重绘产生的输出不能让它复亮，只有下一条 hook 可以', () => {
+    const client = setup(T0);
+    const expiredAt = T0 + HOOK_SILENCE_LIMIT_MS + 1;
+    client._expireSilentHooks(expiredAt);
+    client._readTmuxActivity = () => new Map([['tm', expiredAt + 100]]);
+    client._expireSilentHooks(expiredAt + 200);
+    assert.strictEqual(client._computeIsRunning('s', expiredAt + 200), false);
+    client.updateHookState('s', 'running', 'tm', expiredAt + 300);
+    assert.strictEqual(client._computeIsRunning('s', expiredAt + 300), true);
+  });
+
+  test('没有运行中的会话时不查 tmux', () => {
+    const client = createClient({});
+    client._readTmuxActivity = () => { throw new Error('不该查 tmux'); };
+    assert.doesNotThrow(() => client._expireSilentHooks());
+  });
 });
 
 test('_computeIsRunning：完全由 hook 驱动，无 hook 状态默认 false（绿灯，不读 PTY）', () => {

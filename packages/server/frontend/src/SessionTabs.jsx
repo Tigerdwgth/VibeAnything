@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useId } from 'react';
 import { DndContext, useDraggable, useDroppable, MouseSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { useTheme } from './theme';
+import { SESSION_WORKING_LABEL, sessionLightStyle, sessionLightTitle } from './session-light';
 import FileBrowser from './FileBrowser';
 import { DEFAULT_LAUNCH_COMMAND } from './launch-config';
 import { buildSessionTree, flattenFolderPaths, isDescendant, groupRunningByOwner, UNOWNED_OWNER_KEY } from './folder-tree';
@@ -100,16 +101,11 @@ function SessionItem({ session, machineId, scope = null, depth, active, isOpened
         {isOpened && (
           <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: T.accent, flexShrink: 0 }} />
         )}
-        {/* 红绿灯会话状态点：完全由 Claude Code hook 驱动。每个会话都有灯——
-              isRunning === true  → 🔴红灯（正在运行：hook UserPromptSubmit）
-              isRunning === false → 🟢绿灯（空闲：hook Stop / 没装 hook / 没在跑）
-            不再有 PTY 输出活跃度兜底，所以「点开会话 attach 重绘」不会再让它变红。 */}
         <span
-          title={session.isRunning ? '运行中' : '空闲'}
+          title={sessionLightTitle(session.isRunning)}
           style={{
             width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0,
-            background: session.isRunning ? T.danger : T.success,
-            boxShadow: `0 0 4px ${session.isRunning ? T.danger : T.success}`,
+            ...sessionLightStyle(T, session.isRunning, 4),
           }}
         />
         {editing ? (
@@ -308,7 +304,7 @@ function MachineRunningGroup({ machineId, scope = null, sessions, folders, activ
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem', fontWeight: 600 }}>{shortMachineId(machineId)}</span>
           {containsActive && <span title="当前会话所在开发机" style={{ fontSize: '0.62rem', color: T.accent, flexShrink: 0 }}>当前</span>}
           <span style={{ fontSize: '0.65rem', color: T.textMuted, flexShrink: 0 }}>{sessions.length} 会话</span>
-          {runningCount > 0 && <span style={{ fontSize: '0.62rem', color: T.danger, flexShrink: 0 }}>{runningCount} 运行中</span>}
+          {runningCount > 0 && <span style={{ fontSize: '0.62rem', color: T.working, flexShrink: 0 }}>{runningCount} {SESSION_WORKING_LABEL}</span>}
         </button>
         {allowCreateFolder && (
         <button
@@ -389,7 +385,7 @@ function OwnerGroup({ owner, isSelf, machines, active, openSessionIds, callbacks
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.78rem', fontWeight: 700 }}>{label}</span>
         {collapsed && containsActive && <span title="当前会话在这组里" style={{ fontSize: '0.62rem', color: T.accent, flexShrink: 0 }}>当前</span>}
         <span style={{ fontSize: '0.65rem', color: T.textMuted, flexShrink: 0 }}>{all.length} 会话</span>
-        {runningCount > 0 && <span style={{ fontSize: '0.62rem', color: T.danger, flexShrink: 0 }}>{runningCount} 运行中</span>}
+        {runningCount > 0 && <span style={{ fontSize: '0.62rem', color: T.working, flexShrink: 0 }}>{runningCount} {SESSION_WORKING_LABEL}</span>}
       </button>
       <div id={contentId} hidden={collapsed} className="va-expand" style={{ paddingLeft: '0.5rem' }}>
         {!collapsed && machines.map(m => (

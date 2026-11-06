@@ -6,6 +6,7 @@ const os = require('node:os');
 const { saveConfig, defaultConfig, getBaseDir, getHooksDir } = require('../lib/config');
 // 「哪几条 hook 是我们装的」判据单独成模块（lib/claude-hooks.js），带单测
 const { hasHookScript, removeOurHooks } = require('../lib/claude-hooks');
+const { addStatusHandlers, CLAUDE_STATUS_EVENTS, installStatusHooks, removeStatusHooks } = require('../lib/agent-hooks');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q) => new Promise((r) => rl.question(q, r));
@@ -139,7 +140,7 @@ async function main() {
 
   const srcRoot = path.resolve(__dirname, '..');
   // 复制 hooks
-  for (const f of ['notify.js', 'guard.js', 'status.js', 'format-python.sh', 'code-review.sh', 'fix-write-path.js']) {
+  for (const f of ['notify.js', 'guard.js', 'status.js', 'opencode-status.mjs', 'format-python.sh', 'code-review.sh', 'fix-write-path.js']) {
     const src = path.join(srcRoot, 'hooks', f);
     const dst = path.join(hooksDir, f);
     if (fs.existsSync(src)) {
@@ -230,21 +231,9 @@ async function main() {
     }
   }
 
-  // 会话红绿灯状态上报：UserPromptSubmit（开始运行=红/绿灯）+ Stop（完成=空闲）。
-  // 必须带 async:true —— UserPromptSubmit 默认同步阻塞超时仅 30s，会拖慢 Claude；
-  // status.js 只写一个 evt 文件，异步执行即可。
+  // 会话工作状态上报（黄灯/绿灯）。必须带 async:true，否则同步 hook 会拖慢 Claude。
   if (config.hooks.status) {
-    for (const event of ['UserPromptSubmit', 'Stop']) {
-      if (!claudeSettings.hooks[event]) claudeSettings.hooks[event] = [];
-      const existing = claudeSettings.hooks[event].find(h =>
-        h.hooks?.some(hh => hh.command?.includes('status.js'))
-      );
-      if (!existing) {
-        claudeSettings.hooks[event].push({
-          hooks: [{ type: 'command', command: nodeCmd('status.js'), async: true }]
-        });
-      }
-    }
+    addStatusHandlers(claudeSettings.hooks, CLAUDE_STATUS_EVENTS, nodeCmd('status.js'));
   }
 
   fs.mkdirSync(path.dirname(claudeSettingsPath), { recursive: true });
@@ -255,6 +244,7 @@ async function main() {
   console.log('管理命令:');
   console.log('  npx vibeanything                # 重新配置');
   console.log('  npx vibeanything --remove       # 卸载');
+  console.log('  npx vibeanything --install-status-hooks # 给 Claude Code / Codex / OpenCode 安装黄灯状态上报');
   console.log('  npx vibeanything --daemon start # 启动守护进程 (ws-client + hook 事件转发)');
   console.log('  npx vibeanything --daemon stop  # 停止守护进程');
   console.log('  npx vibeanything --daemon status# 查看状态');
@@ -516,6 +506,14 @@ if (args[0] === 'join') {
   } else {
     console.log('用法: node bin/cli.js --crontab [install|remove|status]');
   }
+} else if (args.includes('--install-status-hooks')) {
+  installStatusHooks({ statusScript: path.join(__dirname, '..', 'hooks', 'status.js') }).then((result) => {
+    console.log('工作状态上报：', result);
+    console.log('已开的 Claude Code 会话下次工具调用时自动生效；已开的 Codex、OpenCode 会话需要重开。');
+  }).catch((error) => {
+    console.error('安装失败:', error.message);
+    process.exit(1);
+  });
 } else if (args.includes('--remove')) {
   const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
   if (fs.existsSync(claudeSettingsPath)) {
@@ -524,6 +522,7 @@ if (args[0] === 'join') {
     if (removed) console.log(`已从 ~/.claude/settings.json 摘掉 ${removed} 条本项目的 hook`);
     fs.writeFileSync(claudeSettingsPath, JSON.stringify(settings, null, 2));
   }
+  removeStatusHooks();
   const baseDir = getBaseDir();
   if (fs.existsSync(baseDir)) fs.rmSync(baseDir, { recursive: true });
   console.log('✅ 已卸载 vibeanything');

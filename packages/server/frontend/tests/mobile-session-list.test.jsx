@@ -112,13 +112,14 @@ describe('机器选择', () => {
 });
 
 describe('红绿灯', () => {
-  test('isRunning=true 是红灯，false 是绿灯（hook 驱动，与桌面版同一个字段）', () => {
+  test('isRunning=true 是黄灯，false 是绿灯（hook 驱动，与桌面版同一个字段）', () => {
     render();
-    const running = row(RUNNING_ROW).querySelector('span[title="运行中"]');
+    const running = row(RUNNING_ROW).querySelector('span[title="工作中"]');
     const idle = row(IDLE_ROW).querySelector('span[title="空闲"]');
     expect(running).toBeTruthy();
     expect(idle).toBeTruthy();
-    expect(running.style.background).toBe(rgb(DARK.danger));
+    expect(running.style.background).toBe(rgb(DARK.working));
+    expect(running.style.animation).toContain('pulse');
     expect(idle.style.background).toBe(rgb(DARK.success));
   });
 });

@@ -25,7 +25,7 @@ cd vibeanything && node bin/cli.js
 |------|---------|------|
 | 会话事件上报 | Stop / Notification | 任务完成、需要确认时上报给 Dashboard（小人状态 + 提示音） |
 | 危险拦截 | PreToolUse (Bash) | 直接拦截 rm -rf 等危险命令，并把原因反馈给 Claude |
-| 会话状态 | UserPromptSubmit / Stop | 上报会话「运行中/空闲」给 Dashboard 红绿灯 |
+| 会话状态 | Claude Code / Codex hook、OpenCode 插件 | 上报会话「工作中/空闲」给 Dashboard 状态灯，用 `--install-status-hooks` 安装 |
 | Python 格式化 | PostToolUse (Edit/Write) | 自动格式化 .py 文件 |
 | Commit 审查 | PreToolUse (Bash) | git commit 前检查代码风格 |
 
@@ -35,7 +35,7 @@ cd vibeanything && node bin/cli.js
 - **会话重命名 + 多级文件夹分组**：支持重命名会话（真改 tmux 名）、任意层级嵌套文件夹、拖拽 / 菜单分组。详见 [docs/session-folders.md](docs/session-folders.md)。
 - **窗口共享**：所有者或管理员在桌面会话右键菜单、手机版会话「⋯」菜单中选择「共享窗口」，指定已有用户。对方可查看并操作该终端，原归属保留；共享窗口显示「共享」标记。取消共享立即停止对方访问，改名保留共享关系，删除窗口清除共享。
 - **手机版 Shift+←**：终端工具条的「⇧←」向终端发送 Shift+左方向键，可用于回答 Codex 问题。
-- **红绿灯会话状态**：绿灯=Claude 正在运行（`UserPromptSubmit`），灰灯=空闲（`Stop`）；hook 驱动为主，未装 hook 的会话回退到 PTY 输出活跃度判断。
+- **会话状态灯**：黄灯=agent 正在工作，绿灯=空闲。支持 Claude Code、Codex、OpenCode；只有 agent 的 hook 能点亮黄灯，窗格静默 15 秒视为已停止。
 - **粘贴图片 / 拖入文件**：在终端里 `Cmd/Ctrl+V` 粘贴截图，或把文件直接拖进终端区域 ——
   文件会上传到**该会话所在的那台开发机**，落在 `<VIBEANYTHING_HOME|~/.vibeanything>/uploads/<日期>/`，
   然后自动把绝对路径敲进终端（含空格的路径会加引号），Claude 随即就能读到这张图/这个文件。
