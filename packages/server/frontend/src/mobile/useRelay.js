@@ -87,6 +87,9 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
             s.sessionId === msg.sessionId ? { ...s, isRunning: running } : s
           ));
         }
+      } else if (msg.type === 'pty_error' && msg.action === 'scroll_to_bottom') {
+        // 每次发送前都会退出 copy-mode，失败不代表无权访问，不能走下面的关会话
+        console.warn('[mobile] 退出复制模式失败:', msg.sessionId, msg.error);
       } else if (msg.type === 'pty_error' && msg.sessionId) {
         // 不弹窗：localStorage 里可能存着隔离前打开的旧会话，每次重连都会重发
         // open_terminal，弹窗会被刷屏。直接把这个无权会话关掉。

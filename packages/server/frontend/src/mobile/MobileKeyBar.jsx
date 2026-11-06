@@ -52,6 +52,8 @@ const Divider = () => (
  * @param {() => void} props.onSendLine    发送输入框内容 + 回车（空框 = 只发回车）
  * @param {() => void} props.onPickImage   打开相册选图
  * @param {() => void} props.onScrollToBottom 回到最新输出（退出 tmux copy-mode）
+ * @param {(text: string) => void} props.onSendToProgram 发整段文字给程序（先退出 tmux copy-mode，否则文字会被吃掉）
+ * @param {() => void} props.onInsertNewline 在输入框光标处换行（软键盘的回车是发送，没有 Shift+Enter）
  * @param {() => void} props.onCopyAll     复制选中内容，无选中则复制整个终端缓冲
  * @param {() => void} props.onCopyCommand 把选中行所在的命令拼成一行再复制（去缩进、拼回折断的行）
  * @param {() => void} props.onPaste       把剪贴板内容敲进终端（读不到剪贴板时弹手动粘贴面板）
@@ -60,7 +62,7 @@ const Divider = () => (
  * @param {() => void} props.onToggleDirectKeyboard
  */
 export default function MobileKeyBar({
-  onSendText, onSendLine, onPickImage, onCopyAll, onCopyCommand, onPaste, onSlashCommand, onScrollToBottom,
+  onSendText, onSendToProgram, onSendLine, onInsertNewline, onPickImage, onCopyAll, onCopyCommand, onPaste, onSlashCommand, onScrollToBottom,
   directKeyboard, onToggleDirectKeyboard,
 }) {
   const send = (seq) => () => onSendText(seq);
@@ -92,7 +94,8 @@ export default function MobileKeyBar({
       <KeyButton label="⤓" title="回到最新输出（退出 tmux 复制模式，跳到最底部）" onClick={onScrollToBottom} tone={TONE_ENTER} />
       <KeyButton label="^C" title="Ctrl+C（中断当前命令）" onClick={send(KEY_SEQUENCES.ctrlC)} tone={TONE_DANGER} />
       <KeyButton label="⏎" title="回车：发送输入框内容（空框 = 发一个回车）" onClick={onSendLine} tone={TONE_ENTER} />
-      <KeyButton label="继续" title="向终端发送「继续」+ 回车" onClick={send(KEY_SEQUENCES.resume)} tone={TONE_RESUME} />
+      <KeyButton label="换行" title="在输入框里换行（不发送）" onClick={onInsertNewline} tone={TONE_TEXT} />
+      <KeyButton label="继续" title="向终端发送「继续」+ 回车" onClick={() => onSendToProgram(KEY_SEQUENCES.resume)} tone={TONE_RESUME} />
       <Divider />
       {/* 斜杠命令与桌面版同一份实现（slash-commands.js）：先 Ctrl+C 打断再发，
           否则 Claude Code 停在补全菜单上时会把这行字当普通输入吃掉。 */}

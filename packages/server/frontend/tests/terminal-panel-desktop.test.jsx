@@ -51,7 +51,7 @@ const inputs = () => ws.sent.filter(m => m.type === 'terminal_input');
 describe('桌面版终端的输入链路', () => {
   test('输入框敲回车 = 整行 + 回车发进 PTY，带对的 machineId / sessionId', () => {
     mount();
-    const input = host.querySelector('input[type="text"]');
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
     expect(input).toBeTruthy();          // 抽成共用组件后输入框必须还在
     input.value = 'echo 你好';
     act(() => {
@@ -65,13 +65,24 @@ describe('桌面版终端的输入链路', () => {
 
   test('工具条的 ⏎ 也走整行发送（ref 接线没断）', () => {
     mount();
-    const input = host.querySelector('input[type="text"]');
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
     input.value = 'ls';
     const enter = Array.from(host.querySelectorAll('button')).find(b => b.textContent === '⏎');
     expect(enter).toBeTruthy();
     act(() => { enter.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
     expect(inputs().map(m => m.data)).toEqual([b64('ls'), b64('\r')]);
     expect(input.value).toBe('');
+  });
+
+  test('工具条的「换行」只在输入框里换行，不发任何字节', () => {
+    mount();
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
+    input.value = 'ab';
+    input.setSelectionRange(1, 1);
+    const btn = Array.from(host.querySelectorAll('button')).find(b => b.textContent === '换行');
+    act(() => { btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+    expect(input.value).toBe('a\nb');
+    expect(inputs()).toEqual([]);
   });
 
   test('「继续」按钮发的是「继续」+ 回车', () => {
@@ -88,6 +99,51 @@ describe('桌面版终端的输入链路', () => {
       act(() => { byText(text).dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
       expect(inputs().at(-1).data).toBe(b64(seq));
     }
+  });
+});
+
+describe('往上滚过之后发文字（tmux 停在 copy-mode）', () => {
+  const pressEnter = (input) => act(() => {
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  });
+  const flow = () => ws.sent
+    .filter(m => m.type === 'scroll_to_bottom' || m.type === 'terminal_input')
+    .map(m => m.type === 'scroll_to_bottom' ? 'exit' : Buffer.from(m.data, 'base64').toString());
+
+  test('输入框：先发退出 copy-mode，再发文字和回车', () => {
+    mount();
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
+    input.value = '看看日志';
+    pressEnter(input);
+    expect(flow()).toEqual(['exit', '看看日志', '\r']);
+  });
+
+  test('继续按钮同样先退出 copy-mode', () => {
+    mount();
+    act(() => {
+      Array.from(host.querySelectorAll('button')).find(b => b.textContent === '继续')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    expect(flow()).toEqual(['exit', '继续\r']);
+  });
+
+  test('方向键要在 copy-mode 里生效，不能退出它', () => {
+    mount();
+    act(() => {
+      Array.from(host.querySelectorAll('button')).find(b => b.textContent === '↑')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    expect(flow()).toEqual(['\x1b[A']);
+  });
+
+  test('ws 断开时文字留在框里，不能悄悄丢掉', () => {
+    mount();
+    ws.readyState = 3;                 // CLOSED
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
+    input.value = '别丢';
+    pressEnter(input);
+    expect(input.value).toBe('别丢');
+    expect(flow()).toEqual([]);
   });
 });
 

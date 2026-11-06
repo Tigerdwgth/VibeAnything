@@ -17,7 +17,9 @@ let calls;
 function render(overrides = {}) {
   const props = {
     onSendText: (t) => calls.push(['text', t]),
+    onSendToProgram: (text) => calls.push(['program', text]),
     onSendLine: () => calls.push(['line']),
+    onInsertNewline: () => calls.push(['newline']),
     onPickImage: () => calls.push(['image']),
     onCopyAll: () => calls.push(['copy']),
     onCopyCommand: () => calls.push(['copyCommand']),
@@ -64,7 +66,6 @@ describe('按键发出的字节', () => {
     ['⇧←', '\x1b[1;2D'],
     ['→', KEY_SEQUENCES.right],
     ['^C', KEY_SEQUENCES.ctrlC],
-    ['继续', KEY_SEQUENCES.resume],
   ];
   for (const [label, seq] of cases) {
     test(`${label} → ${JSON.stringify(seq)}`, () => {
@@ -73,6 +74,12 @@ describe('按键发出的字节', () => {
       expect(calls).toEqual([['text', seq]]);
     });
   }
+
+  test('继续是发给程序的文字，要走先退出 copy-mode 的通路', () => {
+    render();
+    click('继续');
+    expect(calls).toEqual([['program', KEY_SEQUENCES.resume]]);
+  });
 
   test('序列本身就是终端认的那几条转义码', () => {
     // 写死期望值，避免「组件和常量一起改错还互相印证」的假绿
@@ -181,11 +188,17 @@ describe('与桌面版对齐的那几个键', () => {
     expect(calls).toEqual([['paste']]);
   });
 
+  test('换行键只在输入框里换行，不往终端发任何字节', () => {
+    render();
+    click('换行');
+    expect(calls).toEqual([['newline']]);
+  });
+
   test('工具条覆盖桌面版快捷键栏的全部按键', () => {
     render();
     const labels = Array.from(host.querySelectorAll('button')).map(b => b.textContent);
     // 桌面版 TerminalPanel 快捷键栏上的那一排（「⤓ 最新」在手机上省成「⤓」）
-    for (const expected of ['↑', '↓', '←', '→', '⤓', '⏎', '继续', '^C', '⇥', 'Esc', '/clear', '/compact', '复制', '复制命令', '粘贴']) {
+    for (const expected of ['↑', '↓', '←', '→', '⤓', '⏎', '换行', '继续', '^C', '⇥', 'Esc', '/clear', '/compact', '复制', '复制命令', '粘贴']) {
       expect(labels).toContain(expected);
     }
   });

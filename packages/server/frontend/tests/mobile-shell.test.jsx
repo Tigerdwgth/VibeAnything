@@ -162,7 +162,7 @@ describe('会话列表 → 打开终端', () => {
     feedSessions();
     click(rowByCwd('/work/alpha'));
     expect(terminals()).toHaveLength(1);
-    expect(host.querySelector('input[type="text"]')).toBeTruthy();   // 输入框跟着出来
+    expect(host.querySelector('textarea[aria-label="终端输入框"]')).toBeTruthy();   // 输入框跟着出来
   });
 
   test('顶栏标题跟着当前会话走', () => {
@@ -240,6 +240,16 @@ describe('关闭会话', () => {
       ws().emit({ type: 'pty_error', action: 'open_terminal', machineId: 'macmini', sessionId: 'cc-one', error: 'denied' });
     });
     expect(terminals()).toHaveLength(0);
+  });
+
+  test('退出 copy-mode 失败不是归属被拒，会话不能被关掉', () => {
+    mount();
+    feedSessions();
+    click(rowByCwd('/work/alpha'));
+    act(() => {
+      ws().emit({ type: 'pty_error', action: 'scroll_to_bottom', machineId: 'macmini', sessionId: 'cc-one', error: 'tmux session not found' });
+    });
+    expect(terminals()).toHaveLength(1);
   });
 });
 

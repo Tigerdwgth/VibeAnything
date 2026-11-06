@@ -267,6 +267,9 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
             } else if (msg.action === 'select_pane') {
               // 切换焦点失败只是没动，不值得打断用户
               console.warn('[dashboard] 切换分屏失败:', msg.error);
+            } else if (msg.action === 'scroll_to_bottom') {
+              // 每次发送前都会退出 copy-mode，失败不代表无权访问，不能走下面的关 tab
+              console.warn('[dashboard] 退出复制模式失败:', msg.error);
             } else if (msg.sessionId) {
               // 会话归属鉴权拒绝：不弹窗。localStorage 里可能存着隔离前打开的旧 tab，
               // 每次重连都会重发 open_terminal，弹窗会被刷屏。
