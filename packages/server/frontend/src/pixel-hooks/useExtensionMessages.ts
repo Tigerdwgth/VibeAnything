@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { OfficeState } from '../pixel-office/engine/officeState.js'
-import type { OfficeLayout, ToolActivity } from '../pixel-office/types.js'
+import type { OfficeLayout, ToolActivity, AgentPhase } from '../pixel-office/types.js'
 import { extractToolName } from '../pixel-office/toolUtils.js'
 import { migrateLayoutColors } from '../pixel-office/layout/layoutSerializer.js'
 import { buildDynamicCatalog } from '../pixel-office/layout/furnitureCatalog.js'
@@ -55,6 +55,8 @@ export interface ExtensionMessageState {
   agentTools: Record<number, ToolActivity[]>
   agentStatuses: Record<number, string>
   agentInfos: Record<number, AgentInfo>
+  /** 小人 id → 会话的工作阶段（名牌颜色、气泡都看它），见 types.ts 的 AgentPhase */
+  agentPhases: Record<number, AgentPhase>
   subagentTools: Record<number, Record<string, ToolActivity[]>>
   subagentCharacters: SubagentCharacter[]
   layoutReady: boolean
@@ -83,6 +85,7 @@ export function useExtensionMessages(
   const [agentTools, setAgentTools] = useState<Record<number, ToolActivity[]>>({})
   const [agentStatuses, setAgentStatuses] = useState<Record<number, string>>({})
   const [agentInfos, setAgentInfos] = useState<Record<number, AgentInfo>>({})
+  const [agentPhases, setAgentPhases] = useState<Record<number, AgentPhase>>({})
   const [subagentTools, setSubagentTools] = useState<Record<number, Record<string, ToolActivity[]>>>({})
   const [subagentCharacters, setSubagentCharacters] = useState<SubagentCharacter[]>([])
   const [layoutReady, setLayoutReady] = useState(false)
@@ -160,6 +163,12 @@ export function useExtensionMessages(
           return next
         })
         setAgentInfos((prev) => {
+          if (!(id in prev)) return prev
+          const next = { ...prev }
+          delete next[id]
+          return next
+        })
+        setAgentPhases((prev) => {
           if (!(id in prev)) return prev
           const next = { ...prev }
           delete next[id]
@@ -265,11 +274,15 @@ export function useExtensionMessages(
           return { ...prev, [id]: status }
         })
         os.setAgentActive(id, status === 'active')
-        if (status === 'waiting') {
-          os.showWaitingBubble(id)
-          // 提示音统一由 Dashboard 放（它在 hook_event 里已经响过一次，见 Dashboard 的 playSound）。
-          // 这里再响一次就是双响 —— 两边共用同一个 localStorage 开关，关也关不掉其中一个。
-        }
+        // 气泡不在这里挂：「等权限」「干完了」各挂什么由 agentPhase 统一决定（集成层总是
+        // 把 agentPhase 排在最后发）。提示音统一由 Dashboard 放（它在 hook_event 里已经
+        // 响过一次），这里再响就是双响。
+      } else if (msg.type === 'agentPhase') {
+        // 会话的工作阶段：工作中 / 等权限 / 干完了等你 / 空闲。名牌颜色、气泡、打不打字都跟它走。
+        const id = msg.id as number
+        const phase = msg.phase as AgentPhase
+        setAgentPhases((prev) => (prev[id] === phase ? prev : { ...prev, [id]: phase }))
+        os.setAgentPhase(id, phase)
       } else if (msg.type === 'agentToolPermission') {
         const id = msg.id as number
         setAgentTools((prev) => {
@@ -391,5 +404,5 @@ export function useExtensionMessages(
     return () => window.removeEventListener('message', handler)
   }, [getOfficeState])
 
-  return { agents, selectedAgent, agentTools, agentStatuses, agentInfos, subagentTools, subagentCharacters, layoutReady, layoutVersion, loadedAssets }
+  return { agents, selectedAgent, agentTools, agentStatuses, agentInfos, agentPhases, subagentTools, subagentCharacters, layoutReady, layoutVersion, loadedAssets }
 }

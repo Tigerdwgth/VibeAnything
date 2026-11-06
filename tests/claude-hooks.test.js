@@ -9,20 +9,34 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
+const path = require('node:path');
 const { hasHookScript, isOurHook, removeOurHooks } = require('../lib/claude-hooks');
+const { getHooksDir, repoRoot } = require('../lib/paths');
 
 const cmd = (command, extra = {}) => ({ hooks: [{ type: 'command', command, ...extra }] });
 
-// 两种真实存在的装法：向导装的（~/.vibeanything/hooks）与手工装的（仓库目录）
-const WIZARD_NOTIFY = cmd('node /Users/gsj/.vibeanything/hooks/notify.js');
-const REPO_STATUS = cmd('node /Users/gsj/VibeAnything/hooks/status.js', { async: true });
+// 两种真实存在的装法：向导复制到的 <VIBEANYTHING_HOME>/hooks，与 --install-status-hooks 引用的仓库目录
+const WIZARD_NOTIFY = cmd(`node ${path.join(getHooksDir(), 'notify.js')}`);
+const REPO_STATUS = cmd(`node ${JSON.stringify(path.join(repoRoot(), 'hooks', 'status.js'))}`, { async: true });
 const LEGACY_NOTIFY = cmd('node /home/user/claude-code-hooks-feishu/hooks/notify.js');
 const FOREIGN = cmd('node /Users/gsj/.claude/hooks/notify_complete.py');
+// 用户自己的 hook，文件名或路径里恰好带着我们的脚本名 —— 从前按子串认，会被当成我们的
+const USER_NOTIFY = cmd('node /home/alice/.claude/hooks/notify.js');
+const USER_GUARD = cmd('python3 /opt/tools/hooks/guard.js');
+const USER_GIT_STATUS = cmd('node /home/alice/tools/git-status.js');
 
 test('装过就不再装：按脚本名认，仓库改名后照样认得出来', () => {
   assert.strictEqual(hasHookScript([REPO_STATUS], 'status.js'), true);
   assert.strictEqual(hasHookScript([WIZARD_NOTIFY], 'notify.js'), true);
   assert.strictEqual(hasHookScript([LEGACY_NOTIFY], 'notify.js'), true);
+});
+
+test('只按我们的安装路径认：用户自己同名或名字相近的脚本不算装过', () => {
+  assert.strictEqual(hasHookScript([USER_NOTIFY], 'notify.js'), false);
+  assert.strictEqual(hasHookScript([USER_GIT_STATUS], 'status.js'), false, 'git-status.js 让 status.js 被跳过');
+  assert.strictEqual(hasHookScript([cmd('node ./hooks/status.js')], 'status.js'), false, '相对路径无法确认是谁的');
+  // 这次安装用到的目录由调用方补进来
+  assert.strictEqual(hasHookScript([cmd('node "/repo dir/hooks/status.js"')], 'status.js', ['/repo dir/hooks']), true);
 });
 
 test('同一事件下 status.js 的存在不该让 notify.js 被跳过（按具体脚本判，不是按「有没有我们的 hook」）', () => {
@@ -40,6 +54,8 @@ test('认领范围：我们 hooks 目录下的脚本 + 改名前的老形态；�
   assert.strictEqual(isOurHook(REPO_STATUS), true);
   assert.strictEqual(isOurHook(LEGACY_NOTIFY), true);
   assert.strictEqual(isOurHook(FOREIGN), false, '用户自己的 notify_complete.py 不是我们的');
+  assert.strictEqual(isOurHook(USER_NOTIFY), false, '~/.claude/hooks/notify.js 是用户自己的');
+  assert.strictEqual(isOurHook(USER_GUARD), false);
   assert.strictEqual(isOurHook(undefined), false);
 });
 
@@ -47,20 +63,20 @@ test('卸载：摘掉我们的、留下别人的，清空的事件键一起删�
   const before = {
     model: 'opus',
     hooks: {
-      Stop: [REPO_STATUS, FOREIGN, WIZARD_NOTIFY],
-      PreToolUse: [cmd('node /Users/gsj/.vibeanything/hooks/guard.js')],
+      Stop: [REPO_STATUS, FOREIGN, WIZARD_NOTIFY, USER_NOTIFY],
+      PreToolUse: [cmd(`node ${path.join(getHooksDir(), 'guard.js')}`)],
       SessionStart: [cmd('echo hi')],
     },
   };
   const { settings, removed } = removeOurHooks(before);
 
   assert.strictEqual(removed, 3);
-  assert.deepStrictEqual(settings.hooks.Stop, [FOREIGN]);
+  assert.deepStrictEqual(settings.hooks.Stop, [FOREIGN, USER_NOTIFY], '用户自己的 notify.js 被卸载删掉了');
   assert.strictEqual(settings.hooks.PreToolUse, undefined, '清空的事件不留空数组');
   assert.deepStrictEqual(settings.hooks.SessionStart, [cmd('echo hi')]);
   assert.strictEqual(settings.model, 'opus', 'settings 里的其它设置不能动');
   // 不改入参：调用方可能还要用原值做对比
-  assert.strictEqual(before.hooks.Stop.length, 3);
+  assert.strictEqual(before.hooks.Stop.length, 4);
 });
 
 test('卸载一份没有 hooks 的 settings 是无害的空操作', () => {

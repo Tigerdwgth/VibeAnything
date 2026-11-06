@@ -75,6 +75,8 @@ export const CHARACTER_Z_SORT_OFFSET = 0.5
 export const OUTLINE_Z_SORT_OFFSET = 0.001
 export const SELECTED_OUTLINE_ALPHA = 1.0
 export const HOVERED_OUTLINE_ALPHA = 0.5
+/** 「工作中」描边的不透明度：要看得出来，又不能抢选中/悬停的白描边 */
+export const WORKING_OUTLINE_ALPHA = 0.85
 export const GHOST_PREVIEW_SPRITE_ALPHA = 0.5
 export const GHOST_PREVIEW_TINT_ALPHA = 0.25
 export const SELECTION_DASH_PATTERN: [number, number] = [4, 3]

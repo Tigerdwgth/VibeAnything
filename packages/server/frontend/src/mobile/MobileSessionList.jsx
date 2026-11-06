@@ -7,8 +7,10 @@ import {
   partitionByOwner, shouldGroupByOwner, sortOwnerKeys, UNOWNED_OWNER_KEY,
 } from '../folder-tree';
 import useFolderCollapse from '../useFolderCollapse';
+import { sessionKey } from '../session-key';
 import SessionSharing from '../SessionSharing';
 import { MobileActionSheet, MobilePromptSheet } from './MobileSheet';
+import { sessionLightStyle, sessionLightTitle } from '../session-light';
 import {
   getRunningSessionTitle, getRunningSessionDetail, getRunningSessionCommand,
 } from '../session-list-utils';
@@ -203,7 +205,7 @@ function FolderRow({ node, depth, collapsed, onToggle, onMenu, T }) {
       {collapsed && running && (
         <span style={{
           width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0,
-          background: T.danger, boxShadow: `0 0 5px ${T.danger}`,
+          ...sessionLightStyle(T, true, 5),
         }} />
       )}
       <span style={{ color: T.textMuted, fontSize: '0.72rem', flexShrink: 0 }}>{total}</span>
@@ -232,14 +234,11 @@ function SessionRow({ session, machineId, depth, isOpen, isActive, onOpen, onClo
         borderLeft: `3px solid ${isActive ? T.accent : 'transparent'}`,
       }}
     >
-      {/* 红绿灯：isRunning=true → 红（Claude 正在跑），false → 绿（空闲）。
-          完全由开发机侧的 hook 驱动，与桌面版同一个字段。 */}
       <span
-        title={session.isRunning ? '运行中' : '空闲'}
+        title={sessionLightTitle(session.isRunning)}
         style={{
           width: '9px', height: '9px', borderRadius: '50%', flexShrink: 0,
-          background: session.isRunning ? T.danger : T.success,
-          boxShadow: `0 0 5px ${session.isRunning ? T.danger : T.success}`,
+          ...sessionLightStyle(T, session.isRunning, 5),
         }}
       />
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -283,7 +282,7 @@ function SessionRow({ session, machineId, depth, isOpen, isActive, onOpen, onClo
 export default function MobileSessionList({
   token, selfUsername,
   machines, selectedMachine, onSelectMachine,
-  sessions, openSessionIds, activeSessionId,
+  sessions, openSessionKeys, activeSessionKey,
   onOpen, onCloseTab, onStop, onCreate, onRenameSession,
   folders = [],
   onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder,
@@ -349,7 +348,7 @@ export default function MobileSessionList({
     if (session.canShare) {
       items.unshift({ key: 'share', label: '共享窗口…', onSelect: () => setSheet({ kind: 'share', session }) });
     }
-    if (openSessionIds.has(session.sessionId)) {
+    if (openSessionKeys.has(sessionKey(session.machineId, session.sessionId))) {
       items.push({
         key: 'close',
         label: '关闭标签（不杀进程）',
@@ -463,8 +462,8 @@ export default function MobileSessionList({
         session={s}
         machineId={s.machineId}
         depth={depth}
-        isOpen={openSessionIds.has(s.sessionId)}
-        isActive={activeSessionId === s.sessionId}
+        isOpen={openSessionKeys.has(sessionKey(s.machineId, s.sessionId))}
+        isActive={activeSessionKey === sessionKey(s.machineId, s.sessionId)}
         onOpen={onOpen}
         onCloseTab={onCloseTab}
         onMenu={openSessionMenu}

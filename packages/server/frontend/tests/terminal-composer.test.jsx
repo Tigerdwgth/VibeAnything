@@ -20,9 +20,17 @@ let sent;
 function render(props = {}) {
   const ref = createRef();
   act(() => {
-    root.render(<TerminalComposer ref={ref} onSendText={(t) => sent.push(t)} {...props} />);
+    root.render(
+      <TerminalComposer
+        ref={ref}
+        onSendText={(t) => sent.push(t)}
+        onBeforeSendLine={() => {}}
+        isBracketedPaste={() => true}
+        {...props}
+      />,
+    );
   });
-  return { input: host.querySelector('input'), ref };
+  return { input: host.querySelector('textarea'), ref };
 }
 
 function key(input, k, extra = {}) {
@@ -49,6 +57,43 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+});
+
+describe('文字不能丢', () => {
+  const EXIT = '<退出 copy-mode>';
+  const withExit = () => ({ onBeforeSendLine: () => sent.push(EXIT) });
+
+  test('先退出 copy-mode 再发文字，否则文字被 copy-mode 当按键吃掉', () => {
+    const { input } = render(withExit());
+    input.value = '你好';
+    key(input, 'Enter');
+    expect(sent).toEqual([EXIT, '你好', '\r']);
+  });
+
+  test('输入法组合中按回车，兑现时同样先退出 copy-mode', () => {
+    const { input } = render(withExit());
+    composition(input, 'compositionstart');
+    input.value = '继续';
+    key(input, 'Enter', { isComposing: true });
+    composition(input, 'compositionend', '继续');
+    expect(sent).toEqual([EXIT, '继续', '\r']);
+  });
+
+  test('空框回车只是一次回车，不退出 copy-mode', () => {
+    const { input } = render(withExit());
+    key(input, 'Enter');
+    expect(sent).toEqual(['\r']);
+  });
+
+  test('连接断开时文字留在框里，也不发回车', () => {
+    const { input } = render({
+      onSendText: (t) => { sent.push(t); return false; },
+    });
+    input.value = '别丢';
+    key(input, 'Enter');
+    expect(sent).toEqual(['别丢']);
+    expect(input.value).toBe('别丢');
+  });
 });
 
 describe('整行发送', () => {
@@ -106,6 +151,24 @@ describe('中文输入法（Android 的回车竞态）', () => {
     expect(sent).toEqual(['继续', '\r', '\r']);
   });
 
+  // Mac Chrome / iOS 不会补发那次 Enter。旧实现「吞下一次 Enter」的标记会一直挂着，
+  // 把用户下一条消息的真回车吃掉（2026-11-06 复现）。补发只会紧跟着到，过了时间窗照常发。
+  test('没有补发 Enter 的平台：下一条消息的回车照常发出', async () => {
+    const { input } = render();
+    composition(input, 'compositionstart');
+    input.value = '你好';
+    key(input, 'Enter', { isComposing: true });
+    composition(input, 'compositionend', '你好');
+    expect(sent).toEqual(['你好', '\r']);
+
+    await act(async () => { await new Promise(r => setTimeout(r, 350)); });
+    input.value = 'ls';
+    const ev = key(input, 'Enter');
+    expect(ev.defaultPrevented).toBe(true);
+    expect(sent).toEqual(['你好', '\r', 'ls', '\r']);
+    expect(input.value).toBe('');
+  });
+
   test('没按回车的普通中文输入不会自己发出去', () => {
     const { input } = render();
     composition(input, 'compositionstart');
@@ -136,11 +199,46 @@ describe('空框时工具键透传给终端', () => {
     });
   }
 
-  test('Ctrl+字母 → 对应控制字符（Ctrl+C = \\x03）', () => {
+  // 非 Mac 上 Ctrl+V 是浏览器粘贴。往框里第一次粘贴时框必然是空的，
+  // 从前这一下被当成 ^V 发给了终端、原生粘贴也被拦掉（2026-11-06 复现）。
+  describe('空框时浏览器编辑快捷键', () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(window.navigator, 'platform');
+    const setPlatform = (value) => Object.defineProperty(window.navigator, 'platform', { value, configurable: true });
+    afterEach(() => {
+      if (realPlatform) Object.defineProperty(window.navigator, 'platform', realPlatform);
+      else delete window.navigator.platform;
+    });
+
+    test('Windows / Linux：Ctrl+V 留给浏览器粘贴，不发 ^V', () => {
+      setPlatform('Win32');
+      const { input } = render();
+      const ev = key(input, 'v', { ctrlKey: true });
+      expect(sent).toEqual([]);
+      expect(ev.defaultPrevented).toBe(false);
+    });
+
+    test('Windows / Linux：空框 Ctrl+C 仍是打断，Ctrl+A 仍是行首', () => {
+      setPlatform('Win32');
+      const { input } = render();
+      const evs = ['c', 'a'].map(k => key(input, k, { ctrlKey: true }));
+      expect(sent).toEqual(['\x03', '\x01']);
+      expect(evs.every(ev => ev.defaultPrevented)).toBe(true);
+    });
+
+    test('Mac：粘贴是 Cmd+V，Ctrl+C 照旧是打断', () => {
+      setPlatform('MacIntel');
+      const { input } = render();
+      const ev = key(input, 'c', { ctrlKey: true });
+      expect(sent).toEqual(['\x03']);
+      expect(ev.defaultPrevented).toBe(true);
+    });
+  });
+
+  test('Ctrl+字母 → 对应控制字符（Ctrl+D = \\x04）', () => {
     const { input } = render();
-    key(input, 'c', { ctrlKey: true });
     key(input, 'd', { ctrlKey: true });
-    expect(sent).toEqual(['\x03', '\x04']);
+    key(input, 'l', { ctrlKey: true });
+    expect(sent).toEqual(['\x04', '\x0c']);
   });
 });
 
@@ -155,11 +253,21 @@ describe('框里有字时是编辑，不是透传', () => {
     expect(left.defaultPrevented).toBe(false);
   });
 
-  test('Esc 清空输入框，不把 \\x1b 打进终端', () => {
+  test('框里有字时 Esc 照样发给终端，字不清空', () => {
     const { input } = render();
-    input.value = '写错了';
-    key(input, 'Escape');
-    expect(input.value).toBe('');
+    input.value = '写了一大段';
+    const ev = key(input, 'Escape');
+    expect(ev.defaultPrevented).toBe(true);
+    expect(input.value).toBe('写了一大段');
+    expect(sent).toEqual(['\x1b']);
+  });
+
+  test('输入法组合中的 Esc 归输入法，不发给终端', () => {
+    const { input } = render();
+    composition(input, 'compositionstart');
+    input.value = 'ni';
+    const ev = key(input, 'Escape', { isComposing: true });
+    expect(ev.defaultPrevented).toBe(false);
     expect(sent).toEqual([]);
   });
 
@@ -170,5 +278,89 @@ describe('框里有字时是编辑，不是透传', () => {
     key(input, 'Tab');
     expect(input.value).toBe('a\t');
     expect(sent).toEqual([]);
+  });
+});
+
+describe('长文字', () => {
+  const PASTE_START = '\x1b[200~';
+  const PASTE_END = '\x1b[201~';
+
+  test('Shift+Enter 留给浏览器换行，不发送', () => {
+    const { input } = render();
+    input.value = '第一行';
+    const ev = key(input, 'Enter', { shiftKey: true });
+    expect(ev.defaultPrevented).toBe(false);
+    expect(sent).toEqual([]);
+    expect(input.value).toBe('第一行');
+  });
+
+  test('输入法组合中的 Shift+Enter 也不发送', () => {
+    const { input } = render();
+    composition(input, 'compositionstart');
+    key(input, 'Enter', { shiftKey: true, isComposing: true });
+    composition(input, 'compositionend', '字');
+    expect(sent).toEqual([]);
+  });
+
+  test('多行内容整段发出，最后才有一个回车', () => {
+    const { input } = render();
+    input.value = '第一行\n第二行';
+    key(input, 'Enter');
+    expect(sent).toEqual([`${PASTE_START}第一行\r第二行${PASTE_END}`, '\r']);
+    expect(input.value).toBe('');
+  });
+
+  test('程序没开 bracketed paste 时，换行转成终端的回车', () => {
+    const { input } = render({ isBracketedPaste: () => false });
+    input.value = 'a\nb';
+    key(input, 'Enter');
+    expect(sent).toEqual(['a\rb', '\r']);
+  });
+
+  test('单行内容不加粘贴标记', () => {
+    const { input } = render();
+    input.value = '很长'.repeat(500);
+    key(input, 'Enter');
+    expect(sent).toEqual(['很长'.repeat(500), '\r']);
+  });
+
+  test('框高跟内容走，发送后恢复单行', () => {
+    const { input } = render();
+    Object.defineProperty(input, 'scrollHeight', { configurable: true, value: 120 });
+    input.value = '第一行\n第二行\n第三行';
+    act(() => { input.dispatchEvent(new window.Event('input', { bubbles: true })); });
+    expect(input.style.height).toBe('120px');
+    key(input, 'Enter');
+    expect(input.style.height).toBe('');
+  });
+
+  test('隐藏面板量不出高度时不把框压成 0', () => {
+    const { input } = render();
+    input.value = '第一行\n第二行';
+    act(() => { input.dispatchEvent(new window.Event('input', { bubbles: true })); });
+    expect(input.style.height).toBe('auto');
+  });
+
+  test('换行键在光标处插入换行，不发送，焦点留在框里', () => {
+    const { input, ref } = render();
+    Object.defineProperty(input, 'scrollHeight', { configurable: true, value: 64 });
+    input.value = '前半后半';
+    input.setSelectionRange(2, 2);
+    act(() => ref.current.insertNewline());
+    expect(input.value).toBe('前半\n后半');
+    expect(input.selectionStart).toBe(3);
+    expect(document.activeElement).toBe(input);
+    expect(input.style.height).toBe('64px');
+    expect(sent).toEqual([]);
+  });
+
+  test('换行后回车，多行内容整段发出', () => {
+    const { input, ref } = render();
+    input.value = '第一行';
+    input.setSelectionRange(3, 3);
+    act(() => ref.current.insertNewline());
+    input.value += '第二行';
+    key(input, 'Enter');
+    expect(sent).toEqual([`${PASTE_START}第一行\r第二行${PASTE_END}`, '\r']);
   });
 });

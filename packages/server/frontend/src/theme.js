@@ -30,6 +30,7 @@ export const DARK = {
   textPrimary:   '#f1f5f9',
   textSecondary: '#94a3b8',
   textMuted:     '#475569',
+  working:       '#facc15',
 };
 
 export const LIGHT = {
@@ -43,7 +44,7 @@ export const LIGHT = {
   borderHover:   'rgba(0,0,0,0.15)',
   textPrimary:   '#111118',
   textSecondary: '#4b5563',
-  textMuted:     '#9ca3af',
+  textMuted:     '#9ca3af',  working:       '#ca8a04',
 };
 
 export const getTheme = (isDark) => isDark ? DARK : LIGHT;

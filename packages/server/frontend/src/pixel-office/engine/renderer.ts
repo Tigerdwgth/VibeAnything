@@ -4,6 +4,7 @@ import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js'
 import { getCharacterSprites, BUBBLE_PERMISSION_SPRITE, BUBBLE_WAITING_SPRITE } from '../sprites/spriteData.js'
 import { getCharacterSprite } from './characters.js'
 import { renderMatrixEffect } from './matrixEffect.js'
+import { getStatusPalette } from '../statusPalette.js'
 import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles.js'
 import { hasWallSprites, getWallInstances, wallColorToHex } from '../wallTiles.js'
 import {
@@ -12,6 +13,7 @@ import {
   OUTLINE_Z_SORT_OFFSET,
   SELECTED_OUTLINE_ALPHA,
   HOVERED_OUTLINE_ALPHA,
+  WORKING_OUTLINE_ALPHA,
   GHOST_PREVIEW_SPRITE_ALPHA,
   GHOST_PREVIEW_TINT_ALPHA,
   SELECTION_DASH_PATTERN,
@@ -161,12 +163,15 @@ export function renderScene(
       continue
     }
 
-    // White outline: full opacity for selected, 50% for hover
+    // White outline: full opacity for selected, 50% for hover；
+    // 「工作中」的人描一圈主题黄（与侧栏黄灯同源），一眼看得出谁在跑。选中/悬停优先。
     const isSelected = selectedAgentId !== null && ch.id === selectedAgentId
     const isHovered = hoveredAgentId !== null && ch.id === hoveredAgentId
-    if (isSelected || isHovered) {
-      const outlineAlpha = isSelected ? SELECTED_OUTLINE_ALPHA : HOVERED_OUTLINE_ALPHA
-      const outlineData = getOutlineSprite(spriteData)
+    const isWorking = ch.phase === 'working'
+    if (isSelected || isHovered || isWorking) {
+      const outlineAlpha = isSelected ? SELECTED_OUTLINE_ALPHA : isHovered ? HOVERED_OUTLINE_ALPHA : WORKING_OUTLINE_ALPHA
+      const outlineColor = isSelected || isHovered ? '#FFFFFF' : getStatusPalette().working
+      const outlineData = getOutlineSprite(spriteData, outlineColor)
       const outlineCached = getCachedSprite(outlineData, zoom)
       const olDrawX = drawX - zoom  // 1 sprite-pixel offset, scaled
       const olDrawY = drawY - zoom  // outline follows sitting offset via drawY

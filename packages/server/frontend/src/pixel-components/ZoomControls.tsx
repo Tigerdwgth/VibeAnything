@@ -13,13 +13,13 @@ interface ZoomControlsProps {
 }
 
 const btnBase: React.CSSProperties = {
-  width: 40,
-  height: 40,
+  width: 28,
+  height: 28,
   padding: 0,
   background: 'var(--pixel-bg)',
   color: 'var(--pixel-text)',
-  border: '2px solid var(--pixel-border)',
-  borderRadius: 0,
+  border: '1px solid var(--pixel-border)',
+  borderRadius: 6,
   cursor: 'pointer',
   display: 'flex',
   alignItems: 'center',
@@ -79,11 +79,13 @@ export function ZoomControls({ zoom, onZoomChange }: ZoomControlsProps) {
             transform: 'translateX(-50%)',
             zIndex: 'var(--pixel-controls-z)',
             background: 'var(--pixel-bg)',
-            border: '2px solid var(--pixel-border)',
-            borderRadius: 0,
-            padding: '4px 12px',
+            border: '1px solid var(--pixel-border)',
+            borderRadius: 6,
+            padding: '3px 10px',
             boxShadow: 'var(--pixel-shadow)',
-            fontSize: '26px',
+            fontSize: '13px',
+            fontWeight: 600,
+            fontFamily: 'var(--pixel-font, system-ui)',
             color: 'var(--pixel-text)',
             userSelect: 'none',
             opacity: fadeOut ? 0 : 1,
@@ -120,7 +122,7 @@ export function ZoomControls({ zoom, onZoomChange }: ZoomControlsProps) {
           }}
           title="Zoom in (Ctrl+Scroll)"
         >
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <svg width="14" height="14" viewBox="0 0 18 18" fill="none">
             <line x1="9" y1="3" x2="9" y2="15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             <line x1="3" y1="9" x2="15" y2="9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
@@ -138,7 +140,7 @@ export function ZoomControls({ zoom, onZoomChange }: ZoomControlsProps) {
           }}
           title="Zoom out (Ctrl+Scroll)"
         >
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <svg width="14" height="14" viewBox="0 0 18 18" fill="none">
             <line x1="3" y1="9" x2="15" y2="9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
         </button>

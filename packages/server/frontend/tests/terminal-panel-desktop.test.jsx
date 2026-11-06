@@ -51,7 +51,7 @@ const inputs = () => ws.sent.filter(m => m.type === 'terminal_input');
 describe('桌面版终端的输入链路', () => {
   test('输入框敲回车 = 整行 + 回车发进 PTY，带对的 machineId / sessionId', () => {
     mount();
-    const input = host.querySelector('input[type="text"]');
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
     expect(input).toBeTruthy();          // 抽成共用组件后输入框必须还在
     input.value = 'echo 你好';
     act(() => {
@@ -65,13 +65,24 @@ describe('桌面版终端的输入链路', () => {
 
   test('工具条的 ⏎ 也走整行发送（ref 接线没断）', () => {
     mount();
-    const input = host.querySelector('input[type="text"]');
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
     input.value = 'ls';
     const enter = Array.from(host.querySelectorAll('button')).find(b => b.textContent === '⏎');
     expect(enter).toBeTruthy();
     act(() => { enter.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
     expect(inputs().map(m => m.data)).toEqual([b64('ls'), b64('\r')]);
     expect(input.value).toBe('');
+  });
+
+  test('工具条的「换行」只在输入框里换行，不发任何字节', () => {
+    mount();
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
+    input.value = 'ab';
+    input.setSelectionRange(1, 1);
+    const btn = Array.from(host.querySelectorAll('button')).find(b => b.textContent === '换行');
+    act(() => { btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+    expect(input.value).toBe('a\nb');
+    expect(inputs()).toEqual([]);
   });
 
   test('「继续」按钮发的是「继续」+ 回车', () => {
@@ -88,6 +99,51 @@ describe('桌面版终端的输入链路', () => {
       act(() => { byText(text).dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
       expect(inputs().at(-1).data).toBe(b64(seq));
     }
+  });
+});
+
+describe('往上滚过之后发文字（tmux 停在 copy-mode）', () => {
+  const pressEnter = (input) => act(() => {
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  });
+  const flow = () => ws.sent
+    .filter(m => m.type === 'scroll_to_bottom' || m.type === 'terminal_input')
+    .map(m => m.type === 'scroll_to_bottom' ? 'exit' : Buffer.from(m.data, 'base64').toString());
+
+  test('输入框：先发退出 copy-mode，再发文字和回车', () => {
+    mount();
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
+    input.value = '看看日志';
+    pressEnter(input);
+    expect(flow()).toEqual(['exit', '看看日志', '\r']);
+  });
+
+  test('继续按钮同样先退出 copy-mode', () => {
+    mount();
+    act(() => {
+      Array.from(host.querySelectorAll('button')).find(b => b.textContent === '继续')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    expect(flow()).toEqual(['exit', '继续\r']);
+  });
+
+  test('方向键要在 copy-mode 里生效，不能退出它', () => {
+    mount();
+    act(() => {
+      Array.from(host.querySelectorAll('button')).find(b => b.textContent === '↑')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    expect(flow()).toEqual(['\x1b[A']);
+  });
+
+  test('ws 断开时文字留在框里，不能悄悄丢掉', () => {
+    mount();
+    ws.readyState = 3;                 // CLOSED
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
+    input.value = '别丢';
+    pressEnter(input);
+    expect(input.value).toBe('别丢');
+    expect(flow()).toEqual([]);
   });
 });
 
@@ -233,6 +289,45 @@ describe('粘贴按钮在读不到剪贴板时要有出口', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(inputs().map(m => m.data)).toEqual([b64('echo hi')]);
     expect(host.textContent).toContain('已粘贴到终端');
+  });
+});
+
+// 「粘贴」按钮原来把剪贴板原样发出：多行内容里每个换行都等于按一次回车，
+// Claude Code 开着 bracketed paste 也照样先把第一行提交出去（2026-11-06 复现）。
+// 现在与输入框、xterm 原生粘贴同一套规则（terminal-io.js 的 formatTextBlock）。
+describe('粘贴按钮的多行内容按粘贴发', () => {
+  const byText = (t) => Array.from(host.querySelectorAll('button')).find(b => b.textContent === t);
+  let realClipboard;
+  beforeEach(() => { realClipboard = navigator.clipboard; });
+  afterEach(() => {
+    if (realClipboard === undefined) delete navigator.clipboard;
+    else Object.defineProperty(navigator, 'clipboard', { value: realClipboard, configurable: true });
+  });
+  const decode = (data) => new TextDecoder().decode(Uint8Array.from(atob(data), c => c.charCodeAt(0)));
+  const pasteClick = async () => {
+    act(() => { byText('粘贴').dispatchEvent(new window.MouseEvent('click', { bubbles: true })); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  };
+
+  test('程序开了 bracketed paste：整段包进粘贴标记，不逐行回车', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { readText: () => Promise.resolve('line1\nline2') }, configurable: true });
+    mount();
+    // 程序（Claude Code / 现代 shell）打开 bracketed paste，和真实终端收到的序列一样
+    await act(async () => {
+      ws.dispatchEvent(new window.MessageEvent('message', {
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 's-1', data: b64('\x1b[?2004h') }),
+      }));
+      await new Promise(r => setTimeout(r, 50));
+    });
+    await pasteClick();
+    expect(inputs().map(m => decode(m.data))).toEqual(['\x1b[200~line1\rline2\x1b[201~']);
+  });
+
+  test('程序没开 bracketed paste：换行转成终端的回车', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { readText: () => Promise.resolve('a\nb') }, configurable: true });
+    mount();
+    await pasteClick();
+    expect(inputs().map(m => decode(m.data))).toEqual(['a\rb']);
   });
 });
 

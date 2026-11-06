@@ -78,7 +78,8 @@ function DirTree({ ws, machineId, rootPath, onLaunch, onPreviewMd, onNavigate })
     if (!ws || !machineId) return;
     const handler = (e) => {
       const msg = parseWsMessage(e);
-      if (msg?.type === 'dir_entries' && msg.path === rootPath) {
+      // machineId + path 一起认：别的机器（或别的浏览器）列同一路径的回执不能塞进这棵树
+      if (msg?.type === 'dir_entries' && msg.machineId === machineId && msg.path === rootPath) {
         setEntries(msg.entries || []);
       }
     };
@@ -312,7 +313,9 @@ export default function FileBrowser({ ws, machineId, machines, historySessions, 
           />
           <LaunchMenu path={pathValue.trim()} onLaunch={launchWithMachine} T={T} />
         </div>
+        {/* key 带 machineId：换机器时整棵树重挂，不留着上一台机器的列表和展开状态 */}
         <DirTree
+          key={machineId}
           ws={ws}
           machineId={machineId}
           rootPath={treeRoot}

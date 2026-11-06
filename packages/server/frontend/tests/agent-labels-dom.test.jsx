@@ -13,6 +13,7 @@ import { createRoot } from 'react-dom/client';
 import { AgentLabels } from '../src/pixel-components/AgentLabels.tsx';
 import { OfficeState } from '../src/pixel-office/engine/officeState.js';
 import { buildTownSpec, buildFloor } from '../src/pixel-office/layout/townLayout.js';
+import { viewportOf, worldToCss } from '../src/pixel-office/engine/viewport.js';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -106,7 +107,7 @@ describe('名牌的 DOM', () => {
     const 甲 = labels().find(d => d.textContent.includes('甲'));
     const 乙 = labels().find(d => d.textContent.includes('乙'));
     expect(甲.textContent).toBe('甲');
-    expect(乙.textContent).toContain('Bash 运行中');
+    expect(乙.textContent).toContain('Bash 工作中');   // 与侧栏黄灯同一个说法
   });
 
   test('机器名不再每人背一遍（屋顶名牌已经写了），但悬停还查得到', async () => {
@@ -114,6 +115,51 @@ describe('名牌的 DOM', () => {
     await nextFrame();
     const el = labels()[0];
     expect(el.textContent).not.toContain('macmini');
-    expect(el.querySelector('span[title]').title).toContain('macmini');
+    expect(el.querySelector('[title]').title).toContain('macmini');
+  });
+
+  test('名牌可以点（点名牌 = 点小人），整块容器仍然不挡画布', async () => {
+    const picked = [];
+    render({ onSelect: (id) => picked.push(id) });
+    await nextFrame();
+    const el = labels().find(d => d.textContent.includes('乙'));
+    expect(el.style.pointerEvents).toBe('none');
+    const chip = el.querySelector('button');
+    expect(chip.style.pointerEvents).toBe('auto');
+    act(() => chip.click());
+    expect(picked).toEqual([2]);
+  });
+
+  test('四个阶段各有各的样子：干完了 / 等你确认 用实心标记，工作中写工具名，空闲不写副行', async () => {
+    render({
+      agentInfos: { 1: info('甲', { running: true, tool: 'codex' }), 2: info('乙') },
+      agentPhases: { 1: 'working', 2: 'done' },
+    });
+    await nextFrame();
+    expect(labels().find(d => d.textContent.includes('甲')).textContent).toBe('codex 工作中甲');
+    expect(labels().find(d => d.textContent.includes('乙')).textContent).toBe('✓ 完成 · 等你乙');
+    render({ agentPhases: { 1: 'permission', 2: 'idle' } });
+    await nextFrame();
+    expect(labels().find(d => d.textContent.includes('甲')).textContent).toBe('! 等你确认甲');
+    expect(labels().find(d => d.textContent.includes('乙')).textContent).toBe('乙');
+  });
+
+  test('名牌贴在头顶上方、不盖脸；头顶挂着气泡时再让到气泡上方，不把气泡盖掉', async () => {
+    render();
+    await nextFrame();
+    const yOf = (el) => Number(/translate\([^,]+,\s*(-?[\d.]+)px\)/.exec(el.style.transform)[1]);
+    const el = () => labels().find(d => d.textContent.includes('甲'));
+    const ch = os.characters.get(1);
+    const v = viewportOf(os.getLayout(), 2, { x: 0, y: 0 }, SIZE);
+    const sitting = ch.state === 'type' ? 6 : 0;
+    const headTop = worldToCss(v, ch.x, ch.y + sitting - 24).y;
+    const plain = yOf(el());
+    expect(plain).toBeLessThan(headTop);
+    os.showWaitingBubble(1, true);
+    await nextFrame();
+    const bubbleTop = worldToCss(v, ch.x, ch.y + (ch.state === 'type' ? 10 : 0) - 24 - 1 - 13).y;
+    expect(yOf(el())).toBeLessThan(bubbleTop);
+    expect(yOf(el())).toBeLessThan(plain);
   });
 });
+

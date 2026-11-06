@@ -31,7 +31,7 @@ function nowStub(start = 0) {
 test('listCodexPanes 只返回当前命令为 codex 的 pane', () => {
   const { exec } = makeEnv({ panes: ['sess:0.0', 'codex:0.1', 'sess:1.0'] });
   const whip = createTmuxCodexWhip({ exec });
-  assert.deepStrictEqual(whip.listCodexPanes().map(p => p.target), ['codex:0.1']);
+  assert.deepStrictEqual(whip.listCodexPanes().map(p => p.target), ['=codex:0.1'], '会话名要精确匹配');
 });
 
 test('捕获到 "model at capacity" → 对该 pane send-keys continue Enter', () => {
@@ -39,7 +39,7 @@ test('捕获到 "model at capacity" → 对该 pane send-keys continue Enter', (
   const whip = createTmuxCodexWhip({ exec });
   whip.poll();
   assert.strictEqual(sends.length, 1);
-  assert.deepStrictEqual(sends[0], ['send-keys', '-t', 'codex:0.1', 'continue', 'Enter']);
+  assert.deepStrictEqual(sends[0], ['send-keys', '-t', '=codex:0.1', 'continue', 'Enter']);
 });
 
 test('捕获到 429 "exceeded retry limit" → 触发', () => {

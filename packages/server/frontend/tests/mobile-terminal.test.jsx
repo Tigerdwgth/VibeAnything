@@ -59,7 +59,7 @@ describe('基本构件都在', () => {
   test('终端 + 输入框 + 工具条 + 相册入口', () => {
     mount();
     expect(host.querySelector('.xterm')).toBeTruthy();
-    expect(host.querySelector('input[type="text"]')).toBeTruthy();
+    expect(host.querySelector('textarea[aria-label="终端输入框"]')).toBeTruthy();
     const picker = host.querySelector('input[type="file"]');
     expect(picker).toBeTruthy();
     // 手机上没有拖拽、粘贴也不顺手，相册选图是主入口，必须能直接调起图库
@@ -74,7 +74,7 @@ describe('基本构件都在', () => {
 describe('输入链路', () => {
   test('输入框回车 → 整行 + 回车发进 PTY', () => {
     mount();
-    const input = host.querySelector('input[type="text"]');
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
     input.value = '看看日志';
     act(() => {
       input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
@@ -91,11 +91,70 @@ describe('输入链路', () => {
     expect(inputs().map(m => decode(m.data))).toEqual(['\x03', '\x1b', '继续\r']);
   });
 
+  test('工具条换行键 → 输入框里多一行，回车后整段发出', () => {
+    mount();
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
+    input.value = '第一行';
+    input.setSelectionRange(3, 3);
+    click('换行');
+    input.value += '第二行';
+    expect(inputs()).toEqual([]);
+    act(() => {
+      input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    });
+    expect(inputs().map(m => decode(m.data))).toEqual(['第一行\r第二行', '\r']);
+  });
+
   test('ws 没连上时不发也不炸', () => {
     ws.readyState = 3;              // CLOSED
     mount();
     click('^C');
     expect(inputs()).toEqual([]);
+  });
+});
+
+describe('往上滚过之后发文字（tmux 停在 copy-mode）', () => {
+  const pressEnter = (input) => act(() => {
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  });
+  const flow = () => ws.sent
+    .filter(m => m.type === 'scroll_to_bottom' || m.type === 'terminal_input')
+    .map(m => m.type === 'scroll_to_bottom' ? 'exit' : Buffer.from(m.data, 'base64').toString());
+
+  test('输入框：先发退出 copy-mode，再发文字和回车', () => {
+    mount();
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
+    input.value = '看看日志';
+    pressEnter(input);
+    expect(flow()).toEqual(['exit', '看看日志', '\r']);
+  });
+
+  test('继续按钮同样先退出 copy-mode', () => {
+    mount();
+    act(() => {
+      Array.from(host.querySelectorAll('button')).find(b => b.textContent === '继续')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    expect(flow()).toEqual(['exit', '继续\r']);
+  });
+
+  test('方向键要在 copy-mode 里生效，不能退出它', () => {
+    mount();
+    act(() => {
+      Array.from(host.querySelectorAll('button')).find(b => b.textContent === '↑')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    });
+    expect(flow()).toEqual(['\x1b[A']);
+  });
+
+  test('ws 断开时文字留在框里，不能悄悄丢掉', () => {
+    mount();
+    ws.readyState = 3;                 // CLOSED
+    const input = host.querySelector('textarea[aria-label="终端输入框"]');
+    input.value = '别丢';
+    pressEnter(input);
+    expect(input.value).toBe('别丢');
+    expect(flow()).toEqual([]);
   });
 });
 
@@ -436,6 +495,35 @@ describe('粘贴', () => {
 
     expect(inputs().map(m => decode(m.data))).toEqual(['echo 粘过来的']);
     expect(pastePanel()).toBeFalsy();     // 顺利读到就不该弹面板
+  });
+
+  test('多行剪贴板按粘贴发（bracketed paste），不是每行一次回车', async () => {
+    stubClipboard({ readText: async () => 'line1\nline2' });
+    mount();
+    await act(async () => {
+      ws.dispatchEvent(new window.MessageEvent('message', {
+        data: JSON.stringify({ type: 'pty_data', machineId: 'macmini', sessionId: 's-1', data: b64('\x1b[?2004h') }),
+      }));
+      await new Promise(r => setTimeout(r, 50));
+    });
+    click('粘贴');
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(inputs().map(m => decode(m.data))).toEqual(['\x1b[200~line1\rline2\x1b[201~']);
+  });
+
+  test('手动粘贴框里的多行内容同样按粘贴发', () => {
+    stubClipboard(undefined);
+    mount();
+    click('粘贴');
+    const ta = pastePanel();
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    act(() => {
+      setter.call(ta, 'a\nb');
+      ta.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    click('发送到终端');
+    // 裸 shell 没开 bracketed paste：换行转成回车
+    expect(inputs().map(m => decode(m.data))).toEqual(['a\rb']);
   });
 
   test('HTTP 页面上根本没有 clipboard 接口 → 弹手动粘贴框，而不是静默失败', () => {

@@ -57,7 +57,7 @@ test('桌面右键菜单连接共享面板', async () => {
 });
 
 test('手机会话菜单连接共享面板，收件人看不到管理入口', async () => {
-  const props = { token: 'mobile-token', machines: [{ machineId: 'macmini' }], selectedMachine: 'macmini', openSessionIds: new Set(), sessions: [session] };
+  const props = { token: 'mobile-token', machines: [{ machineId: 'macmini' }], selectedMachine: 'macmini', openSessionKeys: new Set(), sessions: [session] };
   await act(async () => root.render(<MobileSessionList {...props} />));
   await click(host.querySelector('[aria-label="会话操作"]'));
   await click(byText('共享窗口…'));

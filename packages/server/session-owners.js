@@ -203,6 +203,16 @@ function removeOwner(machineId, sessionId) {
   return removed;
 }
 
+/**
+ * 新建会话的认领：登记归属，并清掉这个 key 上残留的共享名单 ——
+ * 无主时留下的共享（管理员共享过一个后来消失的会话）不能被带进别人新建的同名会话。
+ */
+function claimOwner(machineId, sessionId, owner) {
+  const claimed = sessions.set(machineId, sessionId, owner);
+  if (shares.delete(key(machineId, sessionId))) persistShares(machineId, sessionId);
+  return claimed;
+}
+
 function renameSession(machineId, oldId, newId) {
   if (!oldId || !newId || oldId === newId) return false;
   const renamed = sessions.rename(machineId, oldId, newId);
@@ -310,7 +320,7 @@ function _resetForTest() {
 
 module.exports = {
   init, key, parseKey,
-  getOwner, setOwner, setOwners, removeOwner, renameSession, listOwners, canAccess,
+  getOwner, setOwner, setOwners, claimOwner, removeOwner, renameSession, listOwners, canAccess,
   getShares, addShare, removeShare, canManageSharing,
   getFolderOwner, setFolderOwner, setFolderOwners, removeFolderOwner,
   listFolderOwners, canAccessFolder, folderLedgerSize, inferFolderOwners,

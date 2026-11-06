@@ -18,6 +18,25 @@ function adminMiddleware(req, res, next) {
   next();
 }
 
+/**
+ * async 路由的统一出口。Express 4 不接 async 处理器抛出的异常：Promise 被拒绝后无人处理，
+ * Node 直接退出进程 —— 一个类型不对的登录请求就能让整个 relay 挂掉。这里兜成 500。
+ */
+function asyncRoute(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch((e) => {
+    console.error(`[http] ${req.method} ${req.path} 处理失败:`, e);
+    if (!res.headersSent) res.status(500).json({ error: '服务器内部错误' });
+  });
+}
+
+/** 请求体里这些字段必须是字符串（缺省由各路由自己判空）；类型不对回 400 并返回 false。 */
+function requireStrings(body, fields, res) {
+  const bad = fields.filter(f => body[f] !== undefined && body[f] !== null && typeof body[f] !== 'string');
+  if (!bad.length) return true;
+  res.status(400).json({ error: `字段类型错误（应为字符串）: ${bad.join(', ')}` });
+  return false;
+}
+
 /** 转交归属前校验目标用户存在；不存在时直接回 404 并返回 false。 */
 async function ensureUserExists(owner, res) {
   const users = await listUsers();
@@ -52,8 +71,9 @@ app.get('/api/build', (req, res) => {
 });
 
 // 注册（仅当无用户时开放，或管理员已登录时可创建新用户）
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', asyncRoute(async (req, res) => {
   const { username, password } = req.body || {};
+  if (!requireStrings(req.body || {}, ['username', 'password'], res)) return;
   if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
   if (username.length < 2) return res.status(400).json({ error: '用户名至少2个字符' });
   if (password.length < 6) return res.status(400).json({ error: '密码至少6个字符' });
@@ -68,11 +88,12 @@ app.post('/api/register', async (req, res) => {
     if (e.message?.includes('UNIQUE')) return res.status(409).json({ error: '用户名已存在' });
     res.status(500).json({ error: '注册失败' });
   }
-});
+}));
 
 // 管理员创建用户
-app.post('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) => {
+app.post('/api/admin/users', authMiddleware, adminMiddleware, asyncRoute(async (req, res) => {
   const { username, password } = req.body || {};
+  if (!requireStrings(req.body || {}, ['username', 'password'], res)) return;
   if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
   if (password.length < 6) return res.status(400).json({ error: '密码至少6个字符' });
   try {
@@ -82,32 +103,33 @@ app.post('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) =
     if (e.message?.includes('UNIQUE')) return res.status(409).json({ error: '用户名已存在' });
     res.status(500).json({ error: '创建失败' });
   }
-});
+}));
 
 // 登录
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', asyncRoute(async (req, res) => {
   const { username, password } = req.body || {};
+  if (!requireStrings(req.body || {}, ['username', 'password'], res)) return;
   if (!username || !password) return res.status(400).json({ error: 'Missing fields' });
   const user = await verifyPassword(username, password);
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
   const token = generateToken(user);
   res.json({ token, username: user.username });
-});
+}));
 
 // 滑动续期：凭一张仍有效的 token 换一张新的 30 天票，载荷与登录一致。
 // role 在这里重新取自库 —— 它平时只认票里的值，续期就是它跟上库里变更的时机；
 // 用户已被删时 getProfile 为空，同样回 401。票已过期 / 已被撤销则在 authMiddleware 就被拒了。
-app.post('/api/session/refresh', authMiddleware, async (req, res) => {
+app.post('/api/session/refresh', authMiddleware, asyncRoute(async (req, res) => {
   const profile = await getProfile(req.user.username);
   if (!profile) return res.status(401).json({ error: '用户已不存在，请重新登录' });
   const { id, username, role } = profile;
   res.json({ token: generateToken({ id, username, role }), username });
-});
+}));
 
 // 当前用户信息。
 // role 仍取自 JWT（授权判定的单一真源就是这张票，和 WS 的 whoami 保持一致）；
 // nickname / avatar 则每次查库 —— token 要隔很久才续期，改完昵称不能等到那时才生效。
-app.get('/api/me', authMiddleware, async (req, res) => {
+app.get('/api/me', authMiddleware, asyncRoute(async (req, res) => {
   const profile = await getProfile(req.user.username);
   if (!profile) return res.status(401).json({ error: '用户已不存在，请重新登录' });
   res.json({
@@ -116,11 +138,11 @@ app.get('/api/me', authMiddleware, async (req, res) => {
     nickname: profile.nickname,
     avatar: profile.avatar,
   });
-});
+}));
 
 // 修改自己的个人信息（昵称 / 头像）。只改自己，没有按用户名指定目标的入口。
 // 字段语义：不传 = 不动，传 null / '' = 清空并回落默认（默认头像、以用户名当昵称）。
-app.patch('/api/profile', authMiddleware, async (req, res) => {
+app.patch('/api/profile', authMiddleware, asyncRoute(async (req, res) => {
   const body = req.body || {};
   const patch = {};
 
@@ -153,7 +175,7 @@ app.patch('/api/profile', authMiddleware, async (req, res) => {
     console.error('[profile] 保存失败:', e);
     res.status(500).json({ error: '保存失败' });
   }
-});
+}));
 
 // ── 会话归属管理（仅管理员）────────────────────────────────
 // 列出 relay 当前已知的全部会话及其归属，无主会话 owner 为 null
@@ -168,8 +190,9 @@ app.get('/api/session-owners', authMiddleware, adminMiddleware, (req, res) => {
 });
 
 // 转交单个会话归属
-app.post('/api/session-owners', authMiddleware, adminMiddleware, async (req, res) => {
+app.post('/api/session-owners', authMiddleware, adminMiddleware, asyncRoute(async (req, res) => {
   const { machineId, sessionId, owner } = req.body || {};
+  if (!requireStrings(req.body || {}, ['machineId', 'sessionId', 'owner'], res)) return;
   if (!machineId || !sessionId || !owner) {
     return res.status(400).json({ error: 'machineId / sessionId / owner 不能为空' });
   }
@@ -177,12 +200,13 @@ app.post('/api/session-owners', authMiddleware, adminMiddleware, async (req, res
   owners.setOwner(machineId, sessionId, owner);
   global.relayServer?.refreshSessionLists();
   res.json({ ok: true, machineId, sessionId, owner });
-});
+}));
 
 // 批量认领：把指定机器上（不传则全部机器）当前所有会话归给某用户。
 // onlyUnowned=true 时只登记无主会话，不动已有归属 —— 存量迁移的安全默认。
-app.post('/api/session-owners/claim-all', authMiddleware, adminMiddleware, async (req, res) => {
+app.post('/api/session-owners/claim-all', authMiddleware, adminMiddleware, asyncRoute(async (req, res) => {
   const { owner, machineId, onlyUnowned = true } = req.body || {};
+  if (!requireStrings(req.body || {}, ['owner', 'machineId'], res)) return;
   if (!owner) return res.status(400).json({ error: 'owner 不能为空' });
   if (!await ensureUserExists(owner, res)) return;
   const relay = global.relayServer;
@@ -200,7 +224,7 @@ app.post('/api/session-owners/claim-all', authMiddleware, adminMiddleware, async
   owners.setOwners(claimed.map(c => ({ machineId: c.machineId, id: c.sessionId, owner })));
   relay.refreshSessionLists();
   res.json({ ok: true, owner, count: claimed.length, claimed });
-});
+}));
 
 // 单个窗口的共享名单。收件人获得该终端的查看和操作权限，归属保持不变。
 function sharingTarget(req, res, next) {
@@ -222,13 +246,13 @@ function sharingState(machineId, sessionId) {
   return { machineId, sessionId, owner: owners.getOwner(machineId, sessionId), users: owners.getShares(machineId, sessionId) };
 }
 
-app.get('/api/session-shares', authMiddleware, sharingTarget, async (req, res) => {
+app.get('/api/session-shares', authMiddleware, sharingTarget, asyncRoute(async (req, res) => {
   const { machineId, sessionId } = req.sharingTarget;
   const users = await listUsers();
   res.json({ ...sharingState(machineId, sessionId), availableUsers: users.map(u => u.username) });
-});
+}));
 
-app.post('/api/session-shares', authMiddleware, sharingTarget, async (req, res) => {
+app.post('/api/session-shares', authMiddleware, sharingTarget, asyncRoute(async (req, res) => {
   const { machineId, sessionId } = req.sharingTarget;
   const { username } = req.body;
   if (typeof username !== 'string' || !username) return res.status(400).json({ error: '请选择共享用户' });
@@ -236,7 +260,7 @@ app.post('/api/session-shares', authMiddleware, sharingTarget, async (req, res) 
   owners.addShare(machineId, sessionId, username);
   global.relayServer?.refreshSessionLists();
   res.json(sharingState(machineId, sessionId));
-});
+}));
 
 app.delete('/api/session-shares', authMiddleware, sharingTarget, (req, res) => {
   const { machineId, sessionId } = req.sharingTarget;
@@ -248,8 +272,9 @@ app.delete('/api/session-shares', authMiddleware, sharingTarget, (req, res) => {
 });
 
 // 修改密码
-app.post('/api/change-password', authMiddleware, async (req, res) => {
+app.post('/api/change-password', authMiddleware, asyncRoute(async (req, res) => {
   const { oldPassword, newPassword } = req.body || {};
+  if (!requireStrings(req.body || {}, ['oldPassword', 'newPassword'], res)) return;
   if (!oldPassword || !newPassword) {
     return res.status(400).json({ error: '旧密码和新密码不能为空' });
   }
@@ -271,7 +296,7 @@ app.post('/api/change-password', authMiddleware, async (req, res) => {
     }
     res.status(500).json({ error: '修改失败' });
   }
-});
+}));
 
 // 获取指定机器的目录列表
 app.get('/api/machines/:machineId/directories', authMiddleware, (req, res) => {
@@ -333,6 +358,9 @@ app.post('/api/machines/join', (req, res) => {
     return res.status(status).json({ error: result.error, code: result.code });
   }
   console.log(`[machines] ${result.machineId} 用邀请码完成装机`);
+  // 新 token 此刻才签出，还没有任何连接用它：这台机器名下现有的连接一定是凭旧凭据建立的
+  // （换 token 正是因为旧的不能再用），鉴权只发生在握手那一刻，不踢它会一直挂着。
+  global.relayServer?.disconnectMachine(result.machineId, 'machine token rotated');
   res.json({ machineToken: result.machineToken, machineId: result.machineId });
 });
 
@@ -359,7 +387,7 @@ app.delete('/api/machines/:machineId', authMiddleware, adminMiddleware, (req, re
 // ── 用量台账（Claude Code / Codex）────────────────────────────
 // 上报口用 machineToken 鉴权而不是 JWT：采集器跑在 cron 里，24h 就过期的 JWT
 // 没法无人值守续期；machineToken 和 WS 握手共用同一份名单，装机时已经配好了。
-app.post('/api/usage/report', async (req, res) => {
+app.post('/api/usage/report', asyncRoute(async (req, res) => {
   if (!hasMachineToken(req.headers['x-machine-token'])) {
     return res.status(401).json({ error: 'invalid machine token' });
   }
@@ -377,10 +405,10 @@ app.post('/api/usage/report', async (req, res) => {
     console.error('[usage] 上报写入失败:', e);
     res.status(500).json({ error: '写入失败' });
   }
-});
+}));
 
 // 查询口用 JWT。普通用户被强制限定成自己，只有管理员能看全员、并用 ?username= 下钻。
-app.get('/api/usage/summary', authMiddleware, async (req, res) => {
+app.get('/api/usage/summary', authMiddleware, asyncRoute(async (req, res) => {
   const admin = isAdmin(req.user);
   const username = admin ? (req.query.username || undefined) : req.user.username;
   try {
@@ -392,7 +420,7 @@ app.get('/api/usage/summary', authMiddleware, async (req, res) => {
     console.error('[usage] 查询失败:', e);
     res.status(500).json({ error: '查询失败' });
   }
-});
+}));
 
 // ── 手机版入口 ────────────────────────────────────────────────
 // /m 与 /m/* 都吐 frontend/dist/mobile.html（Vite 的第二个入口，独立的一棵 React 应用，

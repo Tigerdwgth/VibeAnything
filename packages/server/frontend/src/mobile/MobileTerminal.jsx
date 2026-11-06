@@ -5,7 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { getLaunchCommand } from '../launch-config';
 import {
-  encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit,
+  encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit, formatTextBlock,
 } from '../terminal-io';
 import { takeWheelSteps, buildWheelSequence, fingerDeltaToAccum } from '../terminal-touch-scroll';
 import { buildClickSequence, clientXYToCell } from '../terminal-mouse-click';
@@ -62,9 +62,16 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
 
   function sendText(text) {
     const socket = wsRef.current;
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'terminal_input', machineId, sessionId, data: encodeInput(text) }));
-    }
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify({ type: 'terminal_input', machineId, sessionId, data: encodeInput(text) }));
+    return true;
+  }
+
+  // 发给程序的整段文字（继续、粘贴、上传路径）：tmux 停在 copy-mode 时文字会被它吃掉，先退出来。
+  // 方向键、滚轮等按键序列不能走这里，它们本来就要在 copy-mode 里生效。
+  function sendToProgram(text) {
+    scrollToBottom();
+    return sendText(text);
   }
 
   // 回到最新输出。tmux 滚历史时进的是 copy-mode，那份内容在 alternate screen，
@@ -105,8 +112,7 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
     navigator.clipboard.readText()
       .then((text) => {
         if (!text) { notify('剪贴板是空的'); return; }
-        sendText(text);
-        notify('已粘贴到终端');
+        sendPasted(text);
       })
       .catch(() => setPasteFallback(''));
   }
@@ -116,7 +122,13 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
     const text = pasteFallback;
     setPasteFallback(null);
     if (!text) return;
-    sendText(text);
+    sendPasted(text);
+  }
+
+  // 粘贴进来的一段文字和输入框同一套规则：多行按 bracketed paste 发（见 terminal-io.js 的
+  // formatTextBlock），否则每个换行都等于按一次回车，Claude Code 会先把第一行提交出去。
+  function sendPasted(text) {
+    sendToProgram(formatTextBlock(text, termRef.current.modes.bracketedPasteMode));
     notify('已粘贴到终端');
   }
 
@@ -444,7 +456,7 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
         pendingUploadsRef.current.delete(msg.uploadId);
         if (msg.error) notify(`${name}：${msg.error}`, true);
         else if (msg.path) {
-          sendText(`${quotePath(msg.path)} `);
+          sendToProgram(`${quotePath(msg.path)} `);
           notify(`已插入 ${name}`);
         }
       }
@@ -672,6 +684,8 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
         <TerminalComposer
           ref={composerRef}
           onSendText={sendText}
+          onBeforeSendLine={scrollToBottom}
+          isBracketedPaste={() => termRef.current.modes.bracketedPasteMode}
           placeholder={directKeyboard ? '直连模式：按键直达终端' : '输入内容，回车发送'}
           inputStyle={{ padding: '10px 12px', minHeight: '42px' }}
         />
@@ -679,7 +693,9 @@ function MobileTerminal({ machineId, sessionId, ws, command, cwd, visible }) {
 
       <MobileKeyBar
         onSendText={sendText}
+        onSendToProgram={sendToProgram}
         onSendLine={() => composerRef.current?.sendLine()}
+        onInsertNewline={() => composerRef.current.insertNewline()}
         onPickImage={() => fileInputRef.current?.click()}
         onScrollToBottom={scrollToBottom}
         onPaste={paste}

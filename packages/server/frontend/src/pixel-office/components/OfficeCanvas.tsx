@@ -10,6 +10,7 @@ import { getCatalogEntry, isRotatable } from '../layout/furnitureCatalog.js'
 import { fitZoom } from '../toolUtils.js'
 import { canPlaceFurniture, getWallPlacementRow } from '../editor/editorActions.js'
 import { vscode } from '../../pixel-vscodeApi.js'
+import { watchDevicePixelRatio } from '../engine/dprWatch.js'
 import { unlockAudio } from '../../pixel-notificationSound.js'
 
 interface OfficeCanvasProps {
@@ -110,9 +111,8 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
     // 纯 DPR 变化（把窗口从 Retina 拖到外接 1× 屏）不改容器的 CSS 尺寸，
     // ResizeObserver 不会触发 —— backing store 还是旧 dpr 画的，画面变糊且点不中。
     // 这里盯住当前分辨率：一旦不再匹配就重新 resize。
-    const dprQuery = window.matchMedia(`(resolution: ${dprRef.current}dppx)`)
-    const onDprChange = () => resizeCanvas()
-    dprQuery.addEventListener('change', onDprChange)
+    // 每次变化之后要按新的 dpr 重新注册，否则第二次变化就听不见了（见 watchDevicePixelRatio）
+    const stopDprWatch = watchDevicePixelRatio(resizeCanvas)
 
     const stop = startGameLoop(canvas, {
       update: (dt) => {
@@ -124,9 +124,11 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
         const w = canvas.width
         const h = canvas.height
 
-        // 地图尺寸变了（小镇按新的机器/目录结构重建、或第一次拿到画布尺寸）就贴合一次：
-        // 缩放归到「整张地图看得见」，平移归零（renderFrame 里 pan=0 就是居中）。
-        const sizeKey = `${officeState.getLayout().cols}x${officeState.getLayout().rows}`
+        // 地图尺寸或画布尺寸变了（小镇按新的机器/目录结构重建、窗口缩放、第一次拿到画布尺寸）
+        // 就贴合一次：缩放归到「整张地图看得见」，平移归零（renderFrame 里 pan=0 就是居中）。
+        // 画布尺寸必须进判据：画布翻倍（拖到 Retina 屏、窗口放大一倍）时楼层会选两倍的
+        // 缩放档、网格却一格不变，只看 cols×rows 的话缩放停在旧值，地图只占四分之一块画布。
+        const sizeKey = `${officeState.getLayout().cols}x${officeState.getLayout().rows}@${w}x${h}`
         if (sizeKey !== fittedSizeRef.current && w > 0 && h > 0) {
           fittedSizeRef.current = sizeKey
           panRef.current = { x: 0, y: 0 }
@@ -273,7 +275,7 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
     return () => {
       stop()
       observer.disconnect()
-      dprQuery.removeEventListener('change', onDprChange)
+      stopDprWatch()
     }
     // 依赖只留这两个。原来带着 isEditMode / editorState / editorTick / zoom ——
     // 而 applyEdit 在刷笔刷的**每个 mousemove** 都 setEditorTick，于是每个 mousemove 都

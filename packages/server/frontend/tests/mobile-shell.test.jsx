@@ -162,7 +162,7 @@ describe('会话列表 → 打开终端', () => {
     feedSessions();
     click(rowByCwd('/work/alpha'));
     expect(terminals()).toHaveLength(1);
-    expect(host.querySelector('input[type="text"]')).toBeTruthy();   // 输入框跟着出来
+    expect(host.querySelector('textarea[aria-label="终端输入框"]')).toBeTruthy();   // 输入框跟着出来
   });
 
   test('顶栏标题跟着当前会话走', () => {
@@ -240,6 +240,16 @@ describe('关闭会话', () => {
       ws().emit({ type: 'pty_error', action: 'open_terminal', machineId: 'macmini', sessionId: 'cc-one', error: 'denied' });
     });
     expect(terminals()).toHaveLength(0);
+  });
+
+  test('退出 copy-mode 失败不是归属被拒，会话不能被关掉', () => {
+    mount();
+    feedSessions();
+    click(rowByCwd('/work/alpha'));
+    act(() => {
+      ws().emit({ type: 'pty_error', action: 'scroll_to_bottom', machineId: 'macmini', sessionId: 'cc-one', error: 'tmux session not found' });
+    });
+    expect(terminals()).toHaveLength(1);
   });
 });
 
@@ -399,5 +409,94 @@ describe('会话重命名', () => {
       });
     });
     expect(JSON.parse(localStorage.getItem('mobileOpenTerminals')).map(t => t.sessionId)).toEqual(['cc-one']);
+  });
+});
+
+// ── 会话认 machineId + sessionId（2026-11-06）─────────────────────
+// sessionId 就是 tmux 名，两台机器上重名很常见。只按 sessionId 认会话时，
+// 点 B 机的 main 会切到已经开着的 A 机 main，打的字发去 A 机。
+describe('两台机器上的同名会话', () => {
+  const chip = (mid) => buttons().find(b => b.textContent.startsWith(mid));
+  const decode = (data) => new TextDecoder().decode(Uint8Array.from(atob(data), c => c.charCodeAt(0)));
+
+  function feedTwoMachines() {
+    act(() => { ws().onopen?.(); });
+    act(() => {
+      ws().emit({ type: 'machine_list', machines: [{ machineId: 'mA', defaultWorkDir: '/w' }, { machineId: 'mB', defaultWorkDir: '/w' }] });
+      ws().emit({ type: 'active_sessions', machineId: 'mA', sessions: [{ sessionId: 'main', cwd: '/a' }] });
+      ws().emit({ type: 'active_sessions', machineId: 'mB', sessions: [{ sessionId: 'main', cwd: '/b' }] });
+    });
+  }
+
+  test('先开 A 的 main 再开 B 的 main：两个终端都挂着，可见的是 B，输入发给 B', () => {
+    mount();
+    feedTwoMachines();
+    click(chip('mA'));
+    click(rowByCwd('/a'));
+    click(byLabel('会话列表'));
+    click(chip('mB'));
+    click(rowByCwd('/b'));
+
+    expect(terminals()).toHaveLength(2);
+    expect(localStorage.getItem('mobileActiveSession')).toBe('main');
+    expect(localStorage.getItem('mobileActiveMachine')).toBe('mB');
+
+    const visible = Array.from(host.querySelectorAll('textarea[aria-label="终端输入框"]')).find((ta) => {
+      for (let el = ta; el; el = el.parentElement) if (el.style?.display === 'none') return false;
+      return true;
+    });
+    visible.value = 'whoami';
+    act(() => {
+      visible.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    });
+    const inputs = ws().sent.filter(m => m.type === 'terminal_input');
+    expect(inputs.map(m => [m.machineId, m.sessionId, decode(m.data)])).toEqual([
+      ['mB', 'main', 'whoami'],
+      ['mB', 'main', '\r'],
+    ]);
+  });
+
+  test('关掉 B 的 main 只关 B 的标签，当前接力给 A 的 main', () => {
+    mount();
+    feedTwoMachines();
+    click(chip('mA'));
+    click(rowByCwd('/a'));
+    click(byLabel('会话列表'));
+    click(chip('mB'));
+    click(rowByCwd('/b'));
+    click(byLabel('会话列表'));
+    click(rowByCwd('/b').querySelector('button[aria-label="关闭标签"]'));
+
+    const saved = JSON.parse(localStorage.getItem('mobileOpenTerminals'));
+    expect(saved.map(t => `${t.machineId}:${t.sessionId}`)).toEqual(['mA:main']);
+    expect(localStorage.getItem('mobileActiveMachine')).toBe('mA');
+  });
+
+  test('旧版只存了 sessionId 的当前会话：刷新后按打开列表找回它所在的机器', () => {
+    localStorage.setItem('mobileOpenTerminals', JSON.stringify([
+      { machineId: 'mA', sessionId: 'cc-one', cwd: '/a', command: ['claude'] },
+      { machineId: 'mA', sessionId: 'cc-two', cwd: '/b', command: ['claude'] },
+    ]));
+    localStorage.setItem('mobileActiveSession', 'cc-two');
+    mount();
+    expect(terminalPanels().map(el => el.style.display)).toEqual(['none', 'flex']);
+    expect(localStorage.getItem('mobileActiveMachine')).toBe('mA');
+  });
+});
+
+describe('机器下线', () => {
+  test('machine_list 里没有了的机器，它的会话从列表摘掉', () => {
+    mount();
+    act(() => { ws().onopen?.(); });
+    act(() => {
+      ws().emit({ type: 'machine_list', machines: [{ machineId: 'mA', defaultWorkDir: '/w' }, { machineId: 'mB', defaultWorkDir: '/w' }] });
+      ws().emit({ type: 'active_sessions', machineId: 'mA', sessions: [{ sessionId: 'a1', cwd: '/a' }] });
+      ws().emit({ type: 'active_sessions', machineId: 'mB', sessions: [{ sessionId: 'b1', cwd: '/b' }] });
+    });
+    expect(buttons().some(b => b.textContent.startsWith('mB'))).toBe(true);
+
+    act(() => { ws().emit({ type: 'machine_list', machines: [{ machineId: 'mA', defaultWorkDir: '/w' }] }); });
+    // 机器下拉里不再有它（手机版的机器列表还会从会话里补机器，会话没摘掉它就会留着）
+    expect(buttons().some(b => b.textContent.startsWith('mB'))).toBe(false);
   });
 });

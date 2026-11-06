@@ -6,6 +6,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import MobileSessionList from '../src/mobile/MobileSessionList.jsx';
+import { sessionKey } from '../src/session-key.js';
 import { DARK } from '../src/theme.js';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,8 +31,8 @@ function render(overrides = {}) {
     selectedMachine: 'macmini',
     onSelectMachine: (m) => calls.push(['machine', m]),
     sessions: SESSIONS,
-    openSessionIds: new Set(['my-shell']),
-    activeSessionId: 'my-shell',
+    openSessionKeys: new Set([sessionKey('macmini', 'my-shell')]),
+    activeSessionKey: sessionKey('macmini', 'my-shell'),
     onOpen: (...a) => calls.push(['open', ...a]),
     onCloseTab: (...a) => calls.push(['close', ...a]),
     onStop: (...a) => calls.push(['stop', ...a]),
@@ -112,13 +113,14 @@ describe('机器选择', () => {
 });
 
 describe('红绿灯', () => {
-  test('isRunning=true 是红灯，false 是绿灯（hook 驱动，与桌面版同一个字段）', () => {
+  test('isRunning=true 是黄灯，false 是绿灯（hook 驱动，与桌面版同一个字段）', () => {
     render();
-    const running = row(RUNNING_ROW).querySelector('span[title="运行中"]');
+    const running = row(RUNNING_ROW).querySelector('span[title="工作中"]');
     const idle = row(IDLE_ROW).querySelector('span[title="空闲"]');
     expect(running).toBeTruthy();
     expect(idle).toBeTruthy();
-    expect(running.style.background).toBe(rgb(DARK.danger));
+    expect(running.style.background).toBe(rgb(DARK.working));
+    expect(running.style.animation).toContain('pulse');
     expect(idle.style.background).toBe(rgb(DARK.success));
   });
 });
@@ -221,7 +223,7 @@ describe('新建会话', () => {
 
 describe('空列表', () => {
   test('没有会话时给的是下一步动作，不是一片空白', () => {
-    render({ sessions: [], openSessionIds: new Set(), activeSessionId: null });
+    render({ sessions: [], openSessionKeys: new Set(), activeSessionKey: null });
     expect(host.textContent).toContain('没有运行中的会话');
     expect(host.textContent).toContain('＋ 新建');
   });

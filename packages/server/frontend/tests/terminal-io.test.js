@@ -4,12 +4,36 @@
 
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher,
+  encodeInput, decodePtyData, formatTextBlock, measureTerminalSize, createPtyWriteBatcher,
   remeasureCharSize, installWebFontRefit,
   MIN_COLS, MIN_ROWS,
 } from '../src/terminal-io.js';
 
+describe('formatTextBlock', () => {
+  test('单行原样发', () => {
+    expect(formatTextBlock('ls -la', true)).toBe('ls -la');
+  });
+
+  test('多行包成一段粘贴，LF 和 CRLF 都转成回车', () => {
+    expect(formatTextBlock('a\nb\r\nc', true)).toBe('\x1b[200~a\rb\rc\x1b[201~');
+  });
+
+  test('程序没开 bracketed paste：只转换行，不加标记', () => {
+    expect(formatTextBlock('a\nb', false)).toBe('a\rb');
+  });
+
+  test('文字里混入的结束标记被去掉，后面的内容不会被当成按键执行', () => {
+    expect(formatTextBlock('a\n\x1b[201~rm -rf x\n', true)).toBe('\x1b[200~a\rrm -rf x\r\x1b[201~');
+  });
+});
+
 describe('encodeInput / decodePtyData', () => {
+  test('几十万字节的长文字不爆栈，往返不变', () => {
+    const text = '长文字'.repeat(200_000);
+    const bytes = decodePtyData(encodeInput(text));
+    expect(new TextDecoder().decode(bytes)).toBe(text);
+  });
+
   test('ASCII 往返', () => {
     expect(Array.from(decodePtyData(encodeInput('ls -la\r')))).toEqual(
       Array.from(new TextEncoder().encode('ls -la\r'))

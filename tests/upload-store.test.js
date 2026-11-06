@@ -79,6 +79,26 @@ test('sanitizeName：超长名截断但保住扩展名', () => {
   assert.ok(out.endsWith('.png'), '扩展名要留着，claude 靠它认图片');
 });
 
+test('sanitizeName：长中文名按字节截断，扩展名只出现一次，不劈开汉字', () => {
+  const name = '截图'.repeat(45) + '.png';          // 90 个汉字 = 270 字节，旧代码一个都没截
+  const out = sanitizeName(name);
+  assert.ok(Buffer.byteLength(out) <= 200, `截断后 ${Buffer.byteLength(out)} 字节`);
+  assert.ok(out.endsWith('.png') && !out.endsWith('.png.png'), `扩展名重复: ${out}`);
+  assert.ok(!out.includes('\ufffd'), '截断劈开了多字节字符');
+  assert.ok(name.startsWith(out.slice(0, -4)), '截掉的应该只是尾部');
+  const emoji = sanitizeName('😀'.repeat(80) + '.jpg');
+  assert.ok(Buffer.byteLength(emoji) <= 200 && emoji.endsWith('.jpg'));
+  assert.strictEqual(Array.from(emoji.slice(0, -4)).every(ch => ch === '😀'), true, 'emoji 被劈成半个代理对');
+});
+
+test('长中文名真实落盘：完整文件名（时间戳 + 名字）不超过 255 字节', () => {
+  const base = tmpBase();
+  const { path: saved } = saveUpload({ name: '会议记录截图'.repeat(30) + '.png', data: PNG.toString('base64') }, { baseDir: base });
+  assert.ok(Buffer.byteLength(path.basename(saved)) <= 255);
+  assert.deepStrictEqual(fs.readFileSync(saved), PNG);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
 test('超过上限的文件被拒，且不落盘', () => {
   const base = tmpBase();
   const big = Buffer.alloc(3 * 1024 * 1024).toString('base64');

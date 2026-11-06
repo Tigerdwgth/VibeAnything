@@ -288,6 +288,8 @@ test('越权 open_terminal（attach 他人已有会话）被拒绝且不改归�
 test('open_terminal 新建会话自动认领给创建者', () => {
   const relay = new RelayServer();
   const machine = fakeMachine(relay);
+  // 机器报过真实会话列表之后，「列表里没有」才算新建
+  relay.handleMachineMessage('m1', JSON.stringify({ type: 'active_sessions', sessions: [] }));
   const bob = fakeBrowser(relay, BOB);
   machine.sent.length = 0;
 

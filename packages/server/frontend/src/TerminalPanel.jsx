@@ -14,7 +14,7 @@ import { clipboardKeyAction, isMacPlatform } from './terminal-clipboard-keys';
 import { isTouchOnlyDevice } from './input-device';
 import { attachImeCursorSync, attachImeCommitInput, isImeProcessKeydown } from './terminal-ime';
 import {
-  encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit,
+  encodeInput, decodePtyData, measureTerminalSize, createPtyWriteBatcher, installWebFontRefit, formatTextBlock,
 } from './terminal-io';
 import { copyTextToClipboard as copyToClipboard } from './clipboard';
 import { selectionAsCommand } from './terminal-command-copy';
@@ -105,14 +105,21 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
 
   function sendText(text) {
     const currentWs = wsRef.current;
-    if (currentWs?.readyState === WebSocket.OPEN) {
-      currentWs.send(JSON.stringify({
-        type: 'terminal_input',
-        machineId,
-        sessionId,
-        data: encodeInput(text),
-      }));
-    }
+    if (currentWs?.readyState !== WebSocket.OPEN) return false;
+    currentWs.send(JSON.stringify({
+      type: 'terminal_input',
+      machineId,
+      sessionId,
+      data: encodeInput(text),
+    }));
+    return true;
+  }
+
+  // 发给程序的整段文字（继续、粘贴、上传路径）：tmux 停在 copy-mode 时文字会被它吃掉，先退出来。
+  // 方向键、滚轮等按键序列不能走这里，它们本来就要在 copy-mode 里生效。
+  function sendToProgram(text) {
+    scrollToBottom();
+    return sendText(text);
   }
 
   // 回到最新输出。两个缓冲区各有各的路，都走一遍：
@@ -531,7 +538,7 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
           pendingUploadsRef.current.delete(msg.uploadId);
           if (msg.error) notifyUpload(`${name}：${msg.error}`, true);
           else if (msg.path) {
-            sendText(`${quotePath(msg.path)} `);
+            sendToProgram(`${quotePath(msg.path)} `);
             notifyUpload(`已插入 ${name}`);
           }
         }
@@ -680,7 +687,12 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
         borderTop: '1px solid rgba(255,255,255,0.08)',
         background: '#0d1117', flexShrink: 0,
       }}>
-        <TerminalComposer ref={composerRef} onSendText={sendText} />
+        <TerminalComposer
+          ref={composerRef}
+          onSendText={sendText}
+          onBeforeSendLine={scrollToBottom}
+          isBracketedPaste={() => termRef.current.modes.bracketedPasteMode}
+        />
       </div>
 
       {/* 快捷键栏：单行横向滚动，手机上不会被截断 */}
@@ -709,11 +721,17 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
           onClick={sendLine}
           title="回车：发送输入框内容（空框 = 发一个回车）"
         >⏎</button>
+        <button
+          style={{ ...mBtnStyle, fontSize: '0.8rem' }}
+          onPointerDown={e => e.preventDefault()}
+          onClick={() => composerRef.current.insertNewline()}
+          title="在输入框里换行（不发送）"
+        >换行</button>
         {/* 继续：向终端发送「继续」+ 回车（Claude Code 停在确认点/checkpoint 时一键续跑） */}
         <button
           style={{ ...mBtnStyle, color: '#3fb950', borderColor: 'rgba(63,185,80,0.4)', background: 'rgba(63,185,80,0.1)', fontSize: '0.8rem' }}
           onPointerDown={e => e.preventDefault()}
-          onClick={() => sendText('继续\r')}
+          onClick={() => sendToProgram('继续\r')}
           title="继续：向终端发送「继续」+ 回车"
         >继续</button>
         <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)', alignSelf: 'stretch', margin: '2px 0', flexShrink: 0 }} />
@@ -762,7 +780,8 @@ function TerminalPanel({ machineId, sessionId, ws, command, cwd, visible = true,
             if (!navigator.clipboard?.readText) { notifyUpload(hint, true); return; }
             navigator.clipboard.readText()
               .then(text => {
-                if (text) { sendText(text); notifyUpload('已粘贴到终端'); }
+                // 和输入框、xterm 原生粘贴同一套规则：多行按 bracketed paste 发，否则每个换行都是一次回车
+                if (text) { sendToProgram(formatTextBlock(text, termRef.current.modes.bracketedPasteMode)); notifyUpload('已粘贴到终端'); }
                 else notifyUpload('剪贴板是空的');
               })
               .catch(() => notifyUpload(hint, true));

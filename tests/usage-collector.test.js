@@ -173,6 +173,14 @@ test('reportUrlFrom: ws/wss → http/https 并换成上报路径', () => {
   assert.strictEqual(reportUrlFrom('wss://example.com/ws'), 'https://example.com/api/usage/report');
 });
 
+test('reportUrlFrom: 保留反代前缀（join 写进配置的就是这种地址）', () => {
+  const { resolveServerUrls } = require('../lib/join');
+  const wsUrl = resolveServerUrls('https://host.example/proxy/3000/ws').wsUrl;
+  assert.strictEqual(wsUrl, 'wss://host.example/proxy/3000/ws');
+  assert.strictEqual(reportUrlFrom(wsUrl), 'https://host.example/proxy/3000/api/usage/report');
+  assert.strictEqual(reportUrlFrom('ws://10.0.0.1:3000/ws?x=1'), 'http://10.0.0.1:3000/api/usage/report', '查询串不带过去');
+});
+
 test('sinceDaysAgo 输出 YYYYMMDD 且跨月正确', () => {
   assert.strictEqual(sinceDaysAgo(7, new Date(2026, 7, 16)), '20260809');
   assert.strictEqual(sinceDaysAgo(20, new Date(2026, 7, 16)), '20260727');

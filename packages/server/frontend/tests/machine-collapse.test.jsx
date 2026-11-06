@@ -34,7 +34,7 @@ test('只折叠指定开发机，保留计数及当前标记，数据刷新不�
   expect(content('one').querySelector('.sess-item')).toBeNull();
   expect(content('two').hidden).toBe(false);
   expect(toggle('one').textContent).toContain('1 会话');
-  expect(toggle('one').textContent).toContain('1 运行中');
+  expect(toggle('one').textContent).toContain('1 工作中');
   expect(toggle('one').textContent).toContain('当前');
   render([...sessions, { machineId: 'one', sessionId: 'new', cwd: '/tmp' }]);
   expect(toggle('one').getAttribute('aria-expanded')).toBe('false');

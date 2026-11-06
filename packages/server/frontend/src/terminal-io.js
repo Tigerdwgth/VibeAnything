@@ -7,12 +7,34 @@
 export const MIN_COLS = 20;
 export const MIN_ROWS = 5;
 
+const ENCODE_CHUNK_BYTES = 0x8000;
+
 /**
  * 要发给 PTY 的文本 → relay 协议里的 base64。
  * 终端是字节管道，中文必须先按 UTF-8 编码再 base64，直接 btoa 会抛 InvalidCharacterError。
  */
 export function encodeInput(text) {
-  return btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+  const bytes = new TextEncoder().encode(text);
+  // 分块：一次把十几万个字节展开成参数会爆栈，长文字就发不出去了
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += ENCODE_CHUNK_BYTES) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + ENCODE_CHUNK_BYTES));
+  }
+  return btoa(binary);
+}
+
+/**
+ * 输入框里的一段文字 → 发给 PTY 的文本。单行原样发。
+ * 多行与 xterm 自己粘贴的做法一致：程序开了 bracketed paste 就整段包起来，它知道这是一段
+ * 文字而不是逐行回车；没开就把换行转成终端的回车。
+ * 文字里的结束标记要去掉，否则后面的内容会被当成按键执行。
+ */
+export function formatTextBlock(text, bracketedPaste) {
+  if (!text.includes('\n')) return text;
+  if (!bracketedPaste) return text.replace(/\r?\n/g, '\r');
+  // eslint-disable-next-line no-control-regex -- 要匹配的就是这段控制序列
+  const body = text.replace(/\r?\n/g, '\r').replace(/\x1b\[20[01]~/g, '');
+  return `\x1b[200~${body}\x1b[201~`;
 }
 
 /** relay 下行的 pty_data(base64) → 可直接交给 term.write 的字节。 */

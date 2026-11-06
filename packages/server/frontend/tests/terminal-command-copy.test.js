@@ -217,7 +217,7 @@ describe('selectionAsCommand：真 xterm 选区', () => {
 // ── 真 tmux 链路 ──
 const require = createRequire(import.meta.url);
 const SOCKET = `vacopy${process.pid}`;
-const tmux = (...args) => execFileSync('tmux', ['-L', SOCKET, ...args], { encoding: 'utf8' });
+const tmux = (...args) => execFileSync('tmux', ['-f', '/dev/null', '-L', SOCKET, ...args], { encoding: 'utf8' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function haveTmuxAndPty() {
@@ -244,7 +244,7 @@ describe.skipIf(!haveTmuxAndPty())('真 tmux + node-pty + xterm：复现并验�
     writeFileSync(file, text);
     tmux('new-session', '-d', '-s', 's', '-x', String(COLS), '-y', String(ROWS),
       `cat ${file}; ${tail}; sleep 60`);
-    proc = pty.spawn('tmux', ['-L', SOCKET, 'attach-session', '-t', 's'], {
+    proc = pty.spawn('tmux', ['-f', '/dev/null', '-L', SOCKET, 'attach-session', '-t', 's'], {
       cols: COLS, rows: ROWS, env: { ...process.env, TERM: 'xterm-256color' },
     });
     t = new Terminal({ cols: COLS, rows: ROWS, allowProposedApi: true });

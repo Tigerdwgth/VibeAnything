@@ -13,7 +13,7 @@ import {
   CHARACTER_HIT_HALF_WIDTH,
   CHARACTER_HIT_HEIGHT,
 } from '../../pixel-constants.js'
-import type { Character, Seat, FurnitureInstance, TileType as TileTypeVal, OfficeLayout, PlacedFurniture, TownPlace } from '../types.js'
+import type { Character, Seat, FurnitureInstance, TileType as TileTypeVal, OfficeLayout, PlacedFurniture, TownPlace, AgentPhase } from '../types.js'
 import { createCharacter, updateCharacter, clearWalk } from './characters.js'
 import { matrixEffectSeeds } from './matrixEffect.js'
 import { isWalkable, getWalkableTiles, findPath } from '../layout/tileMap.js'
@@ -137,6 +137,13 @@ export class OfficeState {
 
     // First pass: try to keep characters at their existing seats
     for (const ch of this.characters.values()) {
+      // 正在消散的人 0.3 秒后就被删掉了，不能再给它分座位：它占下的座位在它被删时
+      // 不会还回来（removeAgent 早就还过一次了），于是这个座位永久「有人」，
+      // 新来的人坐不到楼层计划给他的位子 —— 切机器标签页时一整屋人全部坐偏。
+      if (ch.matrixEffect === 'despawn') {
+        ch.seatId = null
+        continue
+      }
       if (ch.seatId && this.seats.has(ch.seatId)) {
         const seat = this.seats.get(ch.seatId)!
         if (!seat.assigned) {
@@ -162,7 +169,7 @@ export class OfficeState {
 
     // Second pass: assign remaining characters to free seats
     for (const ch of this.characters.values()) {
-      if (ch.seatId) continue
+      if (ch.seatId || ch.matrixEffect === 'despawn') continue
       const seatId = this.findFreeSeat()
       if (seatId) {
         this.seats.get(seatId)!.assigned = true
@@ -751,11 +758,38 @@ export class OfficeState {
     }
   }
 
-  showWaitingBubble(id: number): void {
+  /** @param persistent true = 常驻不计时（「干完了、等你输入」要一直挂着，直到用户去看） */
+  showWaitingBubble(id: number, persistent = false): void {
     const ch = this.characters.get(id)
     if (ch) {
       ch.bubbleType = 'waiting'
-      ch.bubbleTimer = WAITING_BUBBLE_DURATION_SEC
+      ch.bubbleTimer = persistent ? Infinity : WAITING_BUBBLE_DURATION_SEC
+    }
+  }
+
+  /**
+   * 按会话的工作阶段设置小人：坐不坐、打不打字、头顶挂什么气泡。
+   * 阶段由集成层统一算好再推下来，这里只负责把它画对，见 types.ts 的 AgentPhase。
+   */
+  setAgentPhase(id: number, phase: AgentPhase): void {
+    const ch = this.characters.get(id)
+    if (!ch) return
+    ch.phase = phase
+    if (phase === 'working') {
+      this.setAgentActive(id, true)
+      ch.bubbleType = null
+      ch.bubbleTimer = 0
+    } else if (phase === 'permission') {
+      // 卡在权限确认上：人留在工位（显示器亮着），但不打字，头顶挂琥珀色的「…」
+      this.setAgentActive(id, true)
+      this.showPermissionBubble(id)
+    } else if (phase === 'done') {
+      this.setAgentActive(id, false)
+      this.showWaitingBubble(id, true)
+    } else {
+      this.setAgentActive(id, false)
+      ch.bubbleType = null
+      ch.bubbleTimer = 0
     }
   }
 

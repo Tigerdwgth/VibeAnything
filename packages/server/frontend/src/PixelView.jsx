@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import PixelApp from './PixelApp';
 import { useTheme } from './theme';
 import { pixelThemeCss, PIXEL_SCOPE_CLASS } from './pixel-theme';
@@ -7,6 +7,11 @@ import { shortMachineId } from './machine-name';
 import {
   buildTownSpec, buildFloorPlan, emitFloorLayout, townSessionKey, townMachineKey,
 } from './pixel-office/layout/townLayout.js';
+import {
+  phaseFromRunning, phaseFromHook, phaseAfterFocus, sortRoster,
+} from './pixel-office/sessionPhase.js';
+import { setStatusPalette } from './pixel-office/statusPalette.js';
+import SessionRoster from './pixel-components/SessionRoster.jsx';
 
 // 把 Dashboard 的会话状态翻译成像素小镇子系统（pixel-agents 移植版）认的那套 window message。
 //
@@ -44,11 +49,15 @@ const sessionKey = townSessionKey;
  * 代价是单测之间会互相串，所以给测试一个重置入口 —— 与服务端那些台账的
  * `_resetForTest` 同一个路子。生产代码不要调它。
  */
+// 测试入口，不是组件；放在这里是因为它清的正是本文件的模块级状态
+// eslint-disable-next-line react-refresh/only-export-components
 export function __resetPixelViewStateForTest() {
   keyToId.clear();
   idToKey.clear();
   idToSession.clear();
   sentSeats.clear();
+  phaseByKey.clear();
+  runningByKey.clear();
   activeSig = null;
   nextAgentId = 1;
 }
@@ -66,6 +75,24 @@ const sentSeats = new Map();
 // 所有人跟着瞬移一次。localStorage 只负责跨页面刷新保存，真值在这里。
 let activeSig = null;
 let nextAgentId = 1;
+// 会话 key → 工作阶段（工作中 / 等权限 / 干完了等你 / 空闲，见 pixel-office/sessionPhase.ts），
+// 以及上一轮会话列表里的 isRunning（「干完了」要靠它判出从在跑到不在跑的那一下）。
+// 必须是模块级：「干完了、等你去看」的标记要熬过切走视图再切回来。
+// 覆盖所有机器的会话 —— 小镇只画当前这台，但会话列表要列全部。
+const phaseByKey = new Map();
+const runningByKey = new Map();
+// 阶段表变了要让会话列表重画：表在 React 之外，按「外部数据源」订阅（useSyncExternalStore）
+let phaseVersion = 0;
+const phaseListeners = new Set();
+function notifyPhases() {
+  phaseVersion++;
+  for (const listener of phaseListeners) listener();
+}
+const subscribePhases = (listener) => {
+  phaseListeners.add(listener);
+  return () => phaseListeners.delete(listener);
+};
+const getPhaseVersion = () => phaseVersion;
 
 function agentIdFor(session) {
   const key = sessionKey(session);
@@ -251,6 +278,60 @@ function infoFor(session) {
 /** 正在跑的时候，气泡里写什么。工具名由子系统从这行字里抽（extractToolName）。 */
 const runningStatus = (info) => `${info.tool}: ${info.cwd ? info.cwd.split('/').filter(Boolean).slice(-1)[0] : info.label}`;
 
+/**
+ * 把一个小人切到某个工作阶段。子系统原有的几条消息各管一摊（工具气泡、agentStatuses、
+ * 权限标记），这里一次按固定顺序发齐，**agentPhase 永远最后发** —— 它决定最终的
+ * 坐姿与头顶气泡，前面几条只负责把各自的状态对齐，不能留下上一阶段的残渣
+ * （以前从「等权限」恢复工作时只发 agentToolStart，agentStatuses 一直停在 waiting，
+ * 名牌就一直挂着「等待确认」）。
+ */
+function postPhase(id, phase, info) {
+  if (phase === 'working') {
+    post({ type: 'agentToolsClear', id });   // 清掉上一轮的权限标记，工具气泡从头来
+    post({ type: 'agentToolStart', id, toolId: `run-${id}`, status: runningStatus(info) });
+    post({ type: 'agentStatus', id, status: 'active' });
+  } else if (phase === 'permission') {
+    post({ type: 'agentToolPermission', id });
+    post({ type: 'agentStatus', id, status: 'waiting' });
+  } else {
+    post({ type: 'agentToolsClear', id });
+    post({ type: 'agentStatus', id, status: 'idle' });
+  }
+  post({ type: 'agentPhase', id, phase });
+}
+
+/** 画布那块地方的设备像素尺寸（与 OfficeCanvas.resizeCanvas 同一条算式） */
+function measureStage(el) {
+  const r = el.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  return { width: Math.round(r.width * dpr), height: Math.round(r.height * dpr) };
+}
+
+/** hook 事件指的是哪个会话（返回会话 key，认不出就 null）。只认已知会话，绝不新建。 */
+function sessionKeyOfHook(machineId, candidates) {
+  for (const sid of candidates) {
+    const direct = `${machineId || 'local'}::${sid}`;
+    if (phaseByKey.has(direct)) return direct;
+    // machineId 没带上时退一步：按 sessionId 在已知会话里找唯一匹配
+    const matches = [...phaseByKey.keys()].filter((k) => k.endsWith(`::${sid}`));
+    if (matches.length === 1) return matches[0];
+  }
+  return null;
+}
+
+/** 会话列表的「窄屏」判据：窄屏上列表浮在画布上（默认收起），宽屏上占一条侧栏 */
+const NARROW_QUERY = '(max-width: 719px)';
+const ROSTER_OPEN_KEY = 'vibeanything:pixelRosterOpen';
+
+function loadRosterOpen(narrow) {
+  try {
+    const raw = localStorage.getItem(ROSTER_OPEN_KEY);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+  } catch { /* 隐私模式 */ }
+  return !narrow;
+}
+
 /** 这台机器一共几个会话（标签页上的计数） */
 const sessionCountOf = (house) => house.rooms.reduce((n, r) => n + r.sessionKeys.length, 0);
 
@@ -267,7 +348,7 @@ function pickHouse(houses, preferred) {
   )[0];
 }
 
-export default function PixelView({ activeSessions, machines, foldersByMachine, onFocusSession, onCloseSession }) {
+export default function PixelView({ activeSessions, machines, foldersByMachine, activeSession, onFocusSession, onCloseSession }) {
   const T = useTheme();
   // id → 上一轮下发过的状态，用来只在**变化时**发消息：activeSessions 每 2.5 秒就刷一次，
   // 无脑重发会让子系统不停地重建气泡、重放提示音。
@@ -287,6 +368,27 @@ export default function PixelView({ activeSessions, machines, foldersByMachine, 
   const stageRef = useRef(null);
   const [stage, setStage] = useState({ width: 0, height: 0 });
   const [preferredMachine, setPreferredMachine] = useState(loadPreferredMachine);
+  // 阶段表（模块级）变了之后让会话列表重画一次
+  useSyncExternalStore(subscribePhases, getPhaseVersion);
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches);
+  const [rosterOpen, setRosterOpen] = useState(() => loadRosterOpen(window.matchMedia(NARROW_QUERY).matches));
+
+  // 画布的状态色（canvas 读不到 CSS 变量）跟着主题走，与侧栏红绿灯同一个黄
+  useEffect(() => { setStatusPalette({ working: T.working }); }, [T]);
+
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_QUERY);
+    const onChange = () => setNarrow(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  const toggleRoster = () => {
+    setRosterOpen((open) => {
+      try { localStorage.setItem(ROSTER_OPEN_KEY, open ? '0' : '1'); } catch { /* 隐私模式 */ }
+      return !open;
+    });
+  };
 
   // 机器 → 分类文件夹 → 会话。标签页和楼层规划都从这一份结构来。
   const houses = useMemo(
@@ -333,7 +435,34 @@ export default function PixelView({ activeSessions, machines, foldersByMachine, 
   }, []);
 
   useEffect(() => {
-    if (!house) return;
+    // 阶段：**所有机器**的会话都推进一遍（会话列表要列全部），画布只画当前这台
+    let phasesChanged = false;
+    const alive = new Set();
+    for (const s of activeSessions) {
+      if (!s?.sessionId) continue;
+      const key = sessionKey(s);
+      alive.add(key);
+      const running = !!s.isRunning;
+      const next = phaseFromRunning(phaseByKey.get(key), runningByKey.get(key), running);
+      runningByKey.set(key, running);
+      if (phaseByKey.get(key) !== next) { phaseByKey.set(key, next); phasesChanged = true; }
+    }
+    for (const key of [...phaseByKey.keys()]) {
+      if (alive.has(key)) continue;
+      phaseByKey.delete(key);
+      runningByKey.delete(key);
+      phasesChanged = true;
+    }
+    if (phasesChanged) notifyPhases();
+
+    if (!house) {
+      // 一台机器都没有了：PixelApp 跟着卸载，它的 React 状态（layoutReady / agents）归零。
+      // 机器回来时 PixelApp 重新挂载，必须当成一次新的挂载把人和地图重灌一遍 ——
+      // 否则签名没变就不发 layoutLoaded，画布永远停在 Loading...（relay 重启时就是这样）。
+      mountedRef.current = false;
+      sentRef.current.clear();
+      return;
+    }
     pruneLegacyStorage();
     machineRef.current = house.key;
 
@@ -347,7 +476,13 @@ export default function PixelView({ activeSessions, machines, foldersByMachine, 
     // 这层楼：一个分类文件夹一间房，铺满整块画布；工位按会话数摆。
     // 每轮都算（很便宜，只是几何不生成瓦片），因为「谁该坐哪」每轮都要对一遍。
     const savedSeats = loadSavedSeats();
-    const { plan } = buildFloorPlan(house, stage, { preferredSeats: preferredSeatsOf(savedSeats) });
+    // 尺寸**现量**，不用 stage 状态：挂载那一轮 stage 还是 {0,0}（量尺寸的 effect 刚
+    // setState，还没重渲染），拿它规划会先按兜底网格生成一层楼、连签名一起写进存档，
+    // 把用户在编辑模式里摆好的家具冲掉 —— 每次切回像素视图都会冲一次。
+    // stage 状态只当「尺寸变了，重跑一遍」的触发器。
+    const { plan } = buildFloorPlan(house, measureStage(stageRef.current), {
+      preferredSeats: preferredSeatsOf(savedSeats),
+    });
     sigRef.current = plan.signature;
     const seatOf = (session) => plan.seatOfSession[sessionKey(session)];
 
@@ -387,25 +522,19 @@ export default function PixelView({ activeSessions, machines, foldersByMachine, 
       }
     }
 
-    // ④ 信息与状态：只在真的变了的时候发
+    // ④ 信息与阶段：只在真的变了的时候发。
+    // running 也要比 —— 名牌上的状态以前读的就是 info.running，而它只在改名换目录时
+    // 才重发，于是会话开跑之后名牌一直写着「空闲」。
     for (const [id, session] of want) {
       const info = infoFor(session);
+      const phase = phaseByKey.get(sessionKey(session));
       const prev = sentRef.current.get(id);
       if (!prev || prev.label !== info.label || prev.machine !== info.machine
-          || prev.cwd !== info.cwd || prev.offline !== info.offline) {
+          || prev.cwd !== info.cwd || prev.offline !== info.offline || prev.running !== info.running) {
         post({ type: 'agentInfo', id, info });
       }
-      if (!prev || prev.running !== info.running) {
-        if (info.running) {
-          // 正在跑：气泡里写明在哪个目录跑什么，小人进「工作中」动画
-          post({ type: 'agentToolStart', id, toolId: `run-${id}`, status: runningStatus(info) });
-        } else {
-          // 空闲：收掉气泡，状态置 idle（子系统据此画绿点，与侧栏红绿灯同义）
-          post({ type: 'agentToolsClear', id });
-          post({ type: 'agentStatus', id, status: 'idle' });
-        }
-      }
-      sentRef.current.set(id, info);
+      if (!prev || prev.phase !== phase) postPhase(id, phase, info);
+      sentRef.current.set(id, { ...info, phase });
     }
 
     // ⑤ 座位：一个分类文件夹一间房，所以谁坐哪是算出来的，不是随机分的。
@@ -427,6 +556,36 @@ export default function PixelView({ activeSessions, machines, foldersByMachine, 
     }
   }, [house, stage, activeSessions]);
 
+  /**
+   * 打开某个会话的终端（点小人、点名牌、点会话列表都走这里）。
+   * 用户去看了，「干完了、等你」的提醒就到此为止。
+   */
+  const acknowledgeDone = useCallback((key) => {
+    const cur = phaseByKey.get(key);
+    const next = phaseAfterFocus(cur);
+    if (next === cur) return;
+    phaseByKey.set(key, next);
+    const id = keyToId.get(key);
+    const info = id && sentRef.current.get(id);
+    if (info) {
+      postPhase(id, next, info);
+      sentRef.current.set(id, { ...info, phase: next });
+    }
+    notifyPhases();
+  }, []);
+
+  const focusSession = useCallback((key, sessionId, machineId) => {
+    acknowledgeDone(key);
+    if (onFocusSession) onFocusSession(sessionId, machineId);
+  }, [acknowledgeDone, onFocusSession]);
+
+  // 从侧栏（而不是小镇）打开的终端：小镇在看终端时是卸载的，回来时 activeSession 就是用户
+  // 刚才看着的那个会话，它的「干完了」提醒同样到此为止。
+  const activeKey = activeSession ? sessionKey(activeSession) : null;
+  useEffect(() => {
+    if (activeKey) acknowledgeDone(activeKey);
+  }, [activeKey, acknowledgeDone]);
+
   // 子系统发回来的动作。它原来是发给 VS Code 扩展宿主的（pixel-vscodeApi 把
   // vscode.postMessage 转成这个事件），移植后只有 focusAgent 被接住，其余**全部丢弃** ——
   // 于是「保存布局」是假的、关会话按钮点了没反应。这里按类型分流。
@@ -437,7 +596,7 @@ export default function PixelView({ activeSessions, machines, foldersByMachine, 
 
       if (msg.type === 'focusAgent') {
         const target = idToSession.get(msg.id);
-        if (target && onFocusSession) onFocusSession(target.sessionId, target.machineId);
+        if (target) focusSession(idToKey.get(msg.id), target.sessionId, target.machineId);
         return;
       }
 
@@ -484,42 +643,47 @@ export default function PixelView({ activeSessions, machines, foldersByMachine, 
     }
     window.addEventListener('pixel:postMessage', onPixelMessage);
     return () => window.removeEventListener('pixel:postMessage', onPixelMessage);
-  }, [onFocusSession, onCloseSession]);
+  }, [focusSession, onCloseSession]);
 
-  // hook 事件只做「立刻点亮/熄灭」，权威状态仍由 active_sessions 兜底（2.5 秒一轮）。
-  // 关键：hook 里的 sessionId 可能是 claude 的 UUID，与 tmux 会话名不是一个命名空间 ——
-  // 查不到已知会话就**丢掉**，绝不像以前那样顺手造一个画布上不存在的小人出来。
+  // hook 事件只做「立刻改阶段」（点亮、干完了、卡在权限上），权威状态仍由 active_sessions
+  // 兜底（2.5 秒一轮）。关键：hook 里的 sessionId 可能是 claude 的 UUID，与 tmux 会话名
+  // 不是一个命名空间 —— 查不到已知会话就**丢掉**，绝不顺手造一个画布上不存在的小人。
   useEffect(() => {
     function onHookEvent(e) {
-      const { hookEvent, sessionId, tmuxSession, machineId } = e.detail || {};
-      const candidates = [sessionId, tmuxSession].filter(Boolean);
-      let id = null;
-      for (const sid of candidates) {
-        const direct = keyToId.get(`${machineId || 'local'}::${sid}`);
-        if (direct) { id = direct; break; }
-        // machineId 没带上时退一步：按 sessionId 在已知会话里找唯一匹配
-        const matches = [...idToSession.entries()].filter(([, v]) => v.sessionId === sid);
-        if (matches.length === 1) { id = matches[0][0]; break; }
+      const { hookEvent, sessionId, tmuxSession, machineId, notificationType } = e.detail || {};
+      const key = sessionKeyOfHook(machineId, [sessionId, tmuxSession].filter(Boolean));
+      if (!key) return;
+      const cur = phaseByKey.get(key);
+      const next = phaseFromHook(cur, { hookEvent, notificationType });
+      if (!next || next === cur) return;
+      phaseByKey.set(key, next);
+      const id = keyToId.get(key);
+      const info = id && sentRef.current.get(id);
+      if (info) {
+        postPhase(id, next, info);
+        sentRef.current.set(id, { ...info, phase: next });
       }
-      if (!id) return;
-
-      if (hookEvent === 'Notification') {
-        post({ type: 'agentToolsClear', id });
-        post({ type: 'agentStatus', id, status: 'waiting' });
-        sentRef.current.set(id, { ...(sentRef.current.get(id) || {}), running: false });
-      } else if (hookEvent === 'Stop') {
-        post({ type: 'agentToolsClear', id });
-        post({ type: 'agentStatus', id, status: 'idle' });
-        sentRef.current.set(id, { ...(sentRef.current.get(id) || {}), running: false });
-      } else if (hookEvent === 'UserPromptSubmit') {
-        const info = sentRef.current.get(id);
-        post({ type: 'agentToolStart', id, toolId: `run-${id}`, status: info ? runningStatus(info) : 'working' });
-        sentRef.current.set(id, { ...(info || {}), running: true });
-      }
+      notifyPhases();
     }
     window.addEventListener('hook:event', onHookEvent);
     return () => window.removeEventListener('hook:event', onHookEvent);
   }, []);
+
+  // 会话列表：所有机器的会话，要你动手的排最前
+  const roster = sortRoster(activeSessions.filter((s) => s?.sessionId).map((s) => {
+    const key = sessionKey(s);
+    return {
+      key,
+      label: getRunningSessionTitle(s),
+      machine: shortMachineId(s.machineId),
+      tool: s.tool || 'claude',
+      phase: phaseByKey.get(key) || (s.isRunning ? 'working' : 'idle'),
+      offline: !!s.offline,
+      onHere: !!house && townMachineKey(s) === house.key,
+      sessionId: s.sessionId,
+      machineId: s.machineId,
+    };
+  }));
 
   const tabBase = {
     display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
@@ -571,14 +735,25 @@ export default function PixelView({ activeSessions, machines, foldersByMachine, 
         })}
       </div>
 
-      {/* 画布那块地方。stage 量的就是这个盒子 —— 它和 OfficeCanvas 的容器是同一个尺寸。 */}
-      <div ref={stageRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {house ? <PixelApp /> : (
-          <div style={{
-            width: '100%', height: '100%', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', color: T.textMuted, fontSize: '0.8rem',
-          }}>还没有开发机连上来</div>
-        )}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
+        {/* 画布那块地方。stage 量的就是这个盒子 —— 它和 OfficeCanvas 的容器是同一个尺寸。 */}
+        <div ref={stageRef} style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+          {house ? <PixelApp /> : (
+            <div style={{
+              width: '100%', height: '100%', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', color: T.textMuted, fontSize: '0.8rem',
+            }}>还没有开发机连上来</div>
+          )}
+        </div>
+        {/* 会话列表：宽屏占一条侧栏（不压地图，画布按剩下的宽度生成楼层），
+            窄屏浮在画布右侧、默认收起 */}
+        <SessionRoster
+          entries={roster}
+          open={rosterOpen}
+          floating={narrow}
+          onToggle={toggleRoster}
+          onPick={(e) => focusSession(e.key, e.sessionId, e.machineId)}
+        />
       </div>
 
       <div style={{

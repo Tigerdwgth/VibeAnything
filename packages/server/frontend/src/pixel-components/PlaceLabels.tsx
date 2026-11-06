@@ -66,13 +66,13 @@ export function PlaceLabels({ officeState, containerRef, zoom, panRef, version, 
         for (const [key, node] of nodesRef.current) {
           const place = byKey.get(key)
           if (!place) { node.style.display = 'none'; continue }
-          const worldX = (place.col + place.cols / 2) * TILE_SIZE
-          // 房间名贴在房间内部第一行 —— 那一行是生成器特意留空的（工位从第二行起排），
-          // 否则小人的名牌会顶在同一个位置上
+          // 房间名贴在房间内部第一行的**左端** —— 那一行是生成器特意留空的（工位从第二行起排）。
+          // 原来居中：坐在最上面那张桌子边的人，名牌往上一让正好压在房间名上
+          const worldX = (place.col + 0.5) * TILE_SIZE
           const worldY = (place.row + 0.5) * TILE_SIZE
           const { x, y } = worldToCss(v, worldX, worldY)
           node.style.display = ''
-          node.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(-50%, -50%)`
+          node.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(0, -50%)`
         }
       }
       rafId = requestAnimationFrame(follow)
@@ -99,13 +99,16 @@ export function PlaceLabels({ officeState, containerRef, zoom, panRef, version, 
             ...chipBase,
             zIndex: 42,   // 在暗角(40)之上、小人名牌(44)之下
             opacity: dimmed ? 0.35 : 1,
-            maxWidth: Math.max(48, place.cols * tilePx - 4),
-            fontSize: '12px',
-            fontWeight: 600,
-            color: 'var(--vscode-foreground, #e6edf3)',
-            background: 'rgba(12,12,20,0.72)',
-            border: '1px solid transparent',
-            padding: '1px 6px',
+            maxWidth: Math.max(48, (place.cols - 1) * tilePx - 4),   // 从第半格起排，右边留到墙
+            fontSize: '11.5px',
+            fontWeight: 700,
+            letterSpacing: 0.2,
+            fontFamily: 'var(--pixel-font, system-ui)',
+            // 与小人名牌同一套令牌：原来写死深色底 + 主题前景色，浅色主题下是黑底黑字
+            color: 'var(--pixel-label-sub, #94a3b8)',
+            background: 'var(--pixel-label-bg, rgba(12,12,20,0.72))',
+            border: '1px solid var(--pixel-border, transparent)',
+            padding: '1px 7px',
           }}
         >{place.label}</div>
       ))}
