@@ -319,3 +319,69 @@ describe('历史会话的「▶ 新建」', () => {
     expect(resumed.command).toEqual(['claude', '--resume', uuid]);
   });
 });
+
+describe('置顶', () => {
+  const pinnedRows = () => {
+    const toggle = host.querySelector('button.pinned-toggle');
+    if (!toggle) return [];
+    return Array.from(document.getElementById(toggle.getAttribute('aria-controls')).querySelectorAll('.sess-item'));
+  };
+  const rightClick = async (el) => {
+    await act(async () => {
+      el.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    });
+  };
+  const menuItem = (text) => Array.from(document.querySelectorAll('.va-pop > div')).find(d => d.textContent.includes(text));
+
+  test('右键 →「置顶」：发 pin_session，这一行立刻进置顶组（不等 relay 回推）', async () => {
+    await boot();
+    await feedTwoMachines();
+    await rightClick(item('/b'));
+    await click(menuItem('置顶'));
+
+    expect(sent('pin_session')).toEqual([{ type: 'pin_session', machineId: 'mB', sessionId: 'main', pinned: true }]);
+    expect(pinnedRows().map(r => r.textContent.includes('/b'))).toEqual([true]);
+    // 另一台机器上同名的 main 没被连带置顶
+    expect(host.querySelectorAll('.sess-item')).toHaveLength(2);
+  });
+
+  test('relay 推来的列表带 pinnedAt（别处置顶的，比如手机上）：两台机器的会话聚进同一个置顶组', async () => {
+    await boot();
+    await act(async () => {
+      ws().emit({ type: 'machine_list', machines: [{ machineId: 'mA', defaultWorkDir: '/w' }, { machineId: 'mB', defaultWorkDir: '/w' }] });
+      ws().emit({ type: 'active_sessions', machineId: 'mA', sessions: [{ sessionId: 'main', cwd: '/a', tool: 'bash', pinnedAt: 2000 }, { sessionId: 'other', cwd: '/a2', tool: 'bash' }] });
+      ws().emit({ type: 'active_sessions', machineId: 'mB', sessions: [{ sessionId: 'main', cwd: '/b', tool: 'bash', pinnedAt: 1000 }] });
+    });
+    expect(pinnedRows().map(r => r.querySelector('.sess-machine').textContent)).toEqual(['mB', 'mA']);
+    expect(host.querySelectorAll('.sess-item')).toHaveLength(3);
+  });
+
+  test('点 📌 取消置顶：发 pinned:false，回到所在开发机的分组里；relay 回推不带 pinnedAt 后保持', async () => {
+    await boot();
+    await act(async () => {
+      ws().emit({ type: 'machine_list', machines: [{ machineId: 'mA', defaultWorkDir: '/w' }] });
+      ws().emit({ type: 'active_sessions', machineId: 'mA', sessions: [{ sessionId: 'main', cwd: '/a', tool: 'bash', pinnedAt: 2000 }] });
+    });
+    await click(item('/a').querySelector('button[title="取消置顶"]'));
+
+    expect(sent('pin_session')).toEqual([{ type: 'pin_session', machineId: 'mA', sessionId: 'main', pinned: false }]);
+    expect(host.querySelector('button.pinned-toggle')).toBeNull();
+    expect(item('/a')).toBeTruthy();
+    await act(async () => {
+      ws().emit({ type: 'active_sessions', machineId: 'mA', sessions: [{ sessionId: 'main', cwd: '/a', tool: 'bash' }] });
+    });
+    expect(host.querySelector('button.pinned-toggle')).toBeNull();
+  });
+
+  test('从置顶组打开会话：终端开在它自己的那台机器上', async () => {
+    await boot();
+    await act(async () => {
+      ws().emit({ type: 'machine_list', machines: [{ machineId: 'mA', defaultWorkDir: '/w' }, { machineId: 'mB', defaultWorkDir: '/w' }] });
+      ws().emit({ type: 'active_sessions', machineId: 'mA', sessions: [{ sessionId: 'main', cwd: '/a', tool: 'bash' }] });
+      ws().emit({ type: 'active_sessions', machineId: 'mB', sessions: [{ sessionId: 'main', cwd: '/b', tool: 'bash', pinnedAt: 1000 }] });
+    });
+    await click(pinnedRows()[0]);
+    await act(async () => { await sleep(150); });
+    expect(sent('open_terminal').map(m => `${m.machineId}:${m.sessionId}`)).toEqual(['mB:main']);
+  });
+});

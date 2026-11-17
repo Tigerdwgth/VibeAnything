@@ -26,7 +26,8 @@
 `../terminal-io.js`（字节编解码 / 尺寸判据 / 写入合批）、`../clipboard.js`、`../session-merge.js`、
 `../app-height.js`、`../terminal-touch-scroll.js`、`../terminal-mouse-click.js`、`../terminal-ime.js`、
 `../terminal-upload.js`、`../launch-config.js`、`../machine-prefs.js`、`../session-list-utils.js`、`../sound.js`、
-`../folder-tree.js`（建树 / 路径拍平 / 防环）、`../useFolderCollapse.js`（折叠状态，按 machineId 存 localStorage）。
+`../folder-tree.js`（建树 / 路径拍平 / 防环）、`../useFolderCollapse.js`（折叠状态，按 machineId 存 localStorage）、
+`../session-pins.js`（置顶组的切分与本地先改）、`../useStoredCollapse.js`（分组折叠状态）。
 
 ## 文件夹交互为什么长这样
 

@@ -77,6 +77,14 @@ async function getDb() {
     created_at INTEGER NOT NULL,
     PRIMARY KEY (machine_id, folder_id)
   )`);
+  // 会话置顶：每个用户自己的偏好，跨开发机（见 session-pins.js）。
+  _db.run(`CREATE TABLE IF NOT EXISTS session_pins (
+    username TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    pinned_at INTEGER NOT NULL,
+    PRIMARY KEY (username, machine_id, session_id)
+  )`);
   // 开发机的长期 token（装机时由一次性邀请码换取）。
   // 存 token 的 sha256 而不是明文：token 只在换取那一刻显示一次，库被看到也冒充不了机器。
   // machine_id 是主键 —— 一台机器一把 token，换新即覆盖，撤销就是删这一行。

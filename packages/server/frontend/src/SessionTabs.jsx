@@ -6,6 +6,8 @@ import FileBrowser from './FileBrowser';
 import { DEFAULT_LAUNCH_COMMAND } from './launch-config';
 import { buildSessionTree, flattenFolderPaths, isDescendant, groupRunningByOwner, UNOWNED_OWNER_KEY } from './folder-tree';
 import useFolderCollapse from './useFolderCollapse';
+import useStoredCollapse from './useStoredCollapse';
+import { splitPinned } from './session-pins';
 import ContextMenu from './ContextMenu';
 import SessionSharing from './SessionSharing';
 import { MOUSE_DRAG_ACTIVATION, TOUCH_DRAG_ACTIVATION, DRAGGABLE_TOUCH_ACTION } from './dnd-activation';
@@ -76,8 +78,14 @@ function EditableText({ value, onSubmit, onCancel, T }) {
 // isOpened：该会话是否已在浏览器中打开（machineId + sessionId 在 openTerminals 里）
 // onClose：关闭已打开的 Tab（只关 tab 不杀进程），仅对已打开会话显示 ✕
 // scope：按归属人分组时的组名（null = 不分组）。拖拽 id 带上它，跨组拖放据此拒绝。
-function SessionItem({ session, machineId, scope = null, depth, active, isOpened, onOpen, onStop, onClose, openMenu, editing, onRename, onCancelEdit, T }) {
-  const drag = useDraggable({ id: `s:${scope ?? ''}:${machineId}:${session.sessionId}`, data: { kind: 'session', machineId, scope, id: session.sessionId } });
+// onUnpin：给了就是「置顶组里的一行」—— 组里混着几台开发机的会话，所以行内标出是哪台机器，
+//   多一个 📌 一点即取消置顶；并且不能拖（拖拽是往本机文件夹里放，置顶组不属于任何一台机器）。
+function SessionItem({ session, machineId, scope = null, depth, active, isOpened, onOpen, onStop, onClose, onUnpin, openMenu, editing, onRename, onCancelEdit, T }) {
+  const drag = useDraggable({
+    id: `${onUnpin ? 'pin' : 's'}:${scope ?? ''}:${machineId}:${session.sessionId}`,
+    data: { kind: 'session', machineId, scope, id: session.sessionId },
+    disabled: !!onUnpin,
+  });
   const selected = active?.sessionId === session.sessionId && active?.machineId === machineId;
   return (
     <div
@@ -134,6 +142,14 @@ function SessionItem({ session, machineId, scope = null, depth, active, isOpened
             }}>{session.owner || '无主'}</span>
         )}
         <span style={{ color: T.textMuted, fontSize: '0.65rem', flexShrink: 0 }}>{timeAgo(session.mtime)}</span>
+        {onUnpin && (
+          <button
+            onClick={e => { e.stopPropagation(); onUnpin(machineId, session.sessionId); }}
+            onMouseDown={e => e.stopPropagation()}
+            title="取消置顶"
+            aria-label={`取消置顶 ${getRunningSessionTitle(session)}`}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', fontSize: '0.66rem', flexShrink: 0 }}>📌</button>
+        )}
         {/* ✕ 仅对已打开会话显示：只关闭 Tab，不杀进程 */}
         {isOpened && onClose && (
           <button
@@ -151,12 +167,121 @@ function SessionItem({ session, machineId, scope = null, depth, active, isOpened
             style={{ background: 'none', border: 'none', color: T.danger, cursor: 'pointer', padding: '0 3px', fontSize: '0.7rem', flexShrink: 0 }}>■</button>
         )}
       </div>
-      <div
-        title={getRunningSessionDetail(session)}
-        style={{ color: T.textMuted, fontSize: '0.68rem', fontFamily: T.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-      >
-        {getRunningSessionDetail(session) || stripSessionPrefix(session.sessionId)}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
+        {onUnpin && (
+          <span
+            className="sess-machine"
+            title={`开发机 ${machineId}`}
+            style={{
+              color: T.textSecondary, border: `1px solid ${T.border}`, borderRadius: '3px',
+              padding: '0 3px', fontSize: '0.6rem', fontFamily: T.fontSans, flexShrink: 0, whiteSpace: 'nowrap',
+            }}>{shortMachineId(machineId)}</span>
+        )}
+        <div
+          title={getRunningSessionDetail(session)}
+          style={{ flex: 1, minWidth: 0, color: T.textMuted, fontSize: '0.68rem', fontFamily: T.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        >
+          {getRunningSessionDetail(session) || stripSessionPrefix(session.sessionId)}
+        </div>
       </div>
+    </div>
+  );
+}
+
+// 分组标题按钮（开发机组、置顶组共用）：整条可点，折叠 / 展开下面的内容。
+// highlighted：当前会话在这一组里。
+function GroupToggle({ className, ariaLabel, title, collapsed, onToggle, contentId, highlighted, children, T }) {
+  return (
+    <button
+      type="button"
+      className={className}
+      aria-label={ariaLabel}
+      aria-expanded={!collapsed}
+      aria-controls={contentId}
+      onClick={onToggle}
+      title={title}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0,
+        minHeight: '34px', padding: '5px 6px', cursor: 'pointer', textAlign: 'left',
+        background: highlighted ? T.accentDim : T.bgCard,
+        border: `1px solid ${highlighted ? T.borderAccent : T.border}`,
+        borderRadius: T.radiusSm, color: T.textSecondary, fontFamily: T.fontSans,
+      }}
+    >
+      <span aria-hidden="true" style={{ flexShrink: 0, transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform 0.12s' }}>▸</span>
+      {children}
+    </button>
+  );
+}
+
+// 分组标题右侧的计数：「N 会话」+ 有在跑的时「M 工作中」
+function GroupCounts({ sessions, T }) {
+  const runningCount = sessions.filter(s => s.isRunning).length;
+  return (
+    <>
+      <span style={{ fontSize: '0.65rem', color: T.textMuted, flexShrink: 0 }}>{sessions.length} 会话</span>
+      {runningCount > 0 && <span style={{ fontSize: '0.62rem', color: T.working, flexShrink: 0 }}>{runningCount} {SESSION_WORKING_LABEL}</span>}
+    </>
+  );
+}
+
+// 置顶组：列表最上面，聚合各台开发机上被置顶的会话（数据与规则见 session-pins.js）。
+// 没有置顶的会话时整组不渲染。
+function PinnedGroup({ sessions, active, openSessionKeys, callbacks }) {
+  const T = useTheme();
+  const contentId = useId();
+  const [collapsed, changeCollapsed] = useStoredCollapse('pinnedCollapsed');
+  const [menu, setMenu] = useState(null);             // { x, y, target }
+  const [editingKey, setEditingKey] = useState(null); // 正在改名的那一行的 sessionKey
+  const containsActive = sessions.some(s => isSameSession(active, s.machineId, s.sessionId));
+
+  const menuItems = () => {
+    if (!menu) return [];
+    const { session } = menu.target;
+    return [
+      { label: '取消置顶', onClick: () => callbacks.onPinSession(session.machineId, session.sessionId, false) },
+      ...(session.canShare ? [{ label: '共享窗口…', onClick: () => callbacks.onShare(session) }] : []),
+      { label: '✎ 重命名', onClick: () => setEditingKey(sessionKey(session.machineId, session.sessionId)) },
+    ];
+  };
+
+  return (
+    <div style={{ marginBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', marginBottom: '4px' }}>
+        <GroupToggle
+          className="pinned-toggle"
+          ariaLabel={`${collapsed ? '展开' : '收起'}置顶`}
+          title="置顶的会话（可来自不同开发机）"
+          collapsed={collapsed}
+          onToggle={() => { changeCollapsed(!collapsed); setMenu(null); }}
+          contentId={contentId} highlighted={containsActive} T={T}
+        >
+          <span aria-hidden="true" style={{ flexShrink: 0, fontSize: '0.7rem' }}>📌</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: '0.75rem', fontWeight: 600 }}>置顶</span>
+          {containsActive && <span title="当前会话在置顶组里" style={{ fontSize: '0.62rem', color: T.accent, flexShrink: 0 }}>当前</span>}
+          <GroupCounts sessions={sessions} T={T} />
+        </GroupToggle>
+      </div>
+      <div id={contentId} hidden={collapsed}>
+        {!collapsed && <div className="va-expand">
+          {sessions.map((s) => {
+            const k = sessionKey(s.machineId, s.sessionId);
+            return (
+              <SessionItem
+                key={k} session={s} machineId={s.machineId} depth={0} active={active}
+                isOpened={openSessionKeys.has(k)}
+                onOpen={callbacks.onOpen} onStop={callbacks.onStop} onClose={callbacks.onClose}
+                onUnpin={(mid, sid) => callbacks.onPinSession(mid, sid, false)}
+                openMenu={(e, target) => setMenu({ x: e.clientX, y: e.clientY, target })}
+                editing={editingKey === k}
+                onRename={(v) => { callbacks.onRenameSession(s.machineId, s.sessionId, v); setEditingKey(null); }}
+                onCancelEdit={() => setEditingKey(null)} T={T}
+              />
+            );
+          })}
+        </div>}
+      </div>
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems()} onClose={() => setMenu(null)} />}
     </div>
   );
 }
@@ -239,16 +364,13 @@ function MachineRunningGroup({ machineId, scope = null, sessions, folders, activ
   const T = useTheme();
   const collapse = useFolderCollapse(machineId);
   const contentId = useId();
-  const storageKey = scope == null ? `machineCollapsed:${machineId}` : `machineCollapsed:${scope}:${machineId}`;
-  const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem(storageKey) === 'true'; } catch { return false; }
-  });
+  const [collapsed, storeCollapsed] = useStoredCollapse(
+    scope == null ? `machineCollapsed:${machineId}` : `machineCollapsed:${scope}:${machineId}`
+  );
   const changeCollapsed = (next) => {
-    setCollapsed(next);
+    storeCollapsed(next);
     setMenu(null);
-    try { localStorage.setItem(storageKey, String(next)); } catch { /* 存储不可用仍可折叠 */ }
   };
-  const runningCount = sessions.filter(s => s.isRunning).length;
   const containsActive = active?.machineId === machineId && sessions.some(s => s.sessionId === active.sessionId);
   const [menu, setMenu] = useState(null);          // { x, y, target }
   const [editingKey, setEditingKey] = useState(null); // 'sess:<id>' | 'folder:<id>'
@@ -272,6 +394,7 @@ function MachineRunningGroup({ machineId, scope = null, sessions, folders, activ
     }
     const sid = target.session.sessionId;
     return [
+      { label: '📌 置顶', onClick: () => callbacks.onPinSession(machineId, sid, true) },
       ...(target.session.canShare ? [{ label: '共享窗口…', onClick: () => callbacks.onShare({ ...target.session, machineId }) }] : []),
       { label: '✎ 重命名', onClick: () => setEditingKey(`sess:${sid}`) },
       null,
@@ -285,28 +408,18 @@ function MachineRunningGroup({ machineId, scope = null, sessions, folders, activ
   return (
     <div style={{ marginBottom: '0.75rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px' }}>
-        <button
-          type="button"
+        <GroupToggle
           className="machine-toggle"
-          aria-label={`${collapsed ? '展开' : '收起'}开发机 ${machineId}`}
-          aria-expanded={!collapsed}
-          aria-controls={contentId}
-          onClick={() => changeCollapsed(!collapsed)}
+          ariaLabel={`${collapsed ? '展开' : '收起'}开发机 ${machineId}`}
           title={machineId}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0,
-            minHeight: '34px', padding: '5px 6px', cursor: 'pointer', textAlign: 'left',
-            background: containsActive ? T.accentDim : T.bgCard,
-            border: `1px solid ${containsActive ? T.borderAccent : T.border}`,
-            borderRadius: T.radiusSm, color: T.textSecondary, fontFamily: T.fontSans,
-          }}
+          collapsed={collapsed}
+          onToggle={() => changeCollapsed(!collapsed)}
+          contentId={contentId} highlighted={containsActive} T={T}
         >
-          <span aria-hidden="true" style={{ flexShrink: 0, transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform 0.12s' }}>▸</span>
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem', fontWeight: 600 }}>{shortMachineId(machineId)}</span>
           {containsActive && <span title="当前会话所在开发机" style={{ fontSize: '0.62rem', color: T.accent, flexShrink: 0 }}>当前</span>}
-          <span style={{ fontSize: '0.65rem', color: T.textMuted, flexShrink: 0 }}>{sessions.length} 会话</span>
-          {runningCount > 0 && <span style={{ fontSize: '0.62rem', color: T.working, flexShrink: 0 }}>{runningCount} {SESSION_WORKING_LABEL}</span>}
-        </button>
+          <GroupCounts sessions={sessions} T={T} />
+        </GroupToggle>
         {allowCreateFolder && (
         <button
           type="button"
@@ -349,14 +462,7 @@ function MachineRunningGroup({ machineId, scope = null, sessions, folders, activ
 function OwnerGroup({ owner, isSelf, machines, active, openSessionKeys, callbacks }) {
   const T = useTheme();
   const contentId = useId();
-  const storageKey = `ownerCollapsed:${owner}`;
-  const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem(storageKey) === 'true'; } catch { return false; }
-  });
-  const changeCollapsed = (next) => {
-    setCollapsed(next);
-    try { localStorage.setItem(storageKey, String(next)); } catch { /* 存储不可用仍可折叠 */ }
-  };
+  const [collapsed, changeCollapsed] = useStoredCollapse(`ownerCollapsed:${owner}`);
   const unowned = owner === UNOWNED_OWNER_KEY;
   const label = unowned ? '无主' : isSelf ? `${owner}（我）` : owner;
   const all = machines.flatMap(m => m.sessions);
@@ -402,7 +508,7 @@ function OwnerGroup({ owner, isSelf, machines, active, openSessionKeys, callback
   );
 }
 
-function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals = [], active, selfUsername, onOpen, onStop, onClose, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder }) {
+function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals = [], active, selfUsername, onOpen, onStop, onClose, onRenameSession, onPinSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder }) {
   const T = useTheme();
   // 鼠标：移动 5px 即开拖（避免点击会话项 attach 终端被误判为拖拽）。
   // 触屏：长按 250ms 才开拖，之前划动超过 5px 取消拖拽还给
@@ -414,13 +520,15 @@ function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals =
   // 已打开会话的集合：来自浏览器 openTerminals，用于在会话列表里标记“已打开”。
   // 键带 machineId：两台机器上同名 tmux 会话不能互相标成已打开（见 session-key.js）
   const openSessionKeys = new Set(openTerminals.map(t => sessionKey(t.machineId, t.sessionId)));
-  const byMachine = activeSessions.reduce((acc, s) => {
+  // 置顶的会话聚到最上面的置顶组（跨开发机），不在下面的开发机分组里再出现一次
+  const { pinned, rest } = splitPinned(activeSessions);
+  const byMachine = rest.reduce((acc, s) => {
     const mid = s.machineId || 'local';
     (acc[mid] = acc[mid] || []).push(s);
     return acc;
   }, {});
   // 管理员看全部会话：先按人分组再按机器（不需要分组时为 null，见 groupRunningByOwner）
-  const ownerGroups = groupRunningByOwner(activeSessions, foldersByMachine, selfUsername);
+  const ownerGroups = groupRunningByOwner(rest, foldersByMachine, selfUsername);
 
   const handleDragEnd = (event) => {
     const { active: a, over } = event;
@@ -440,12 +548,15 @@ function RunningTab({ onShare, activeSessions, foldersByMachine, openTerminals =
   };
 
   // onClose：关闭已打开 Tab（不杀进程），随 callbacks 一路透传到 SessionItem
-  const callbacks = { onShare, onOpen, onStop, onClose, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder };
+  const callbacks = { onShare, onOpen, onStop, onClose, onRenameSession, onPinSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder };
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
-      <style>{`.owner-toggle:hover { color: ${T.accent} !important; } .owner-toggle:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; } .machine-toggle:hover { border-color: ${T.accent} !important; } .machine-toggle:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; } .sess-item:hover { background: ${T.bgHover} !important; color: ${T.textPrimary} !important; }`}</style>
+      <style>{`.owner-toggle:hover { color: ${T.accent} !important; } .owner-toggle:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; } .machine-toggle:hover, .pinned-toggle:hover { border-color: ${T.accent} !important; } .machine-toggle:focus-visible, .pinned-toggle:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; } .sess-item:hover { background: ${T.bgHover} !important; color: ${T.textPrimary} !important; }`}</style>
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        {pinned.length > 0 && (
+          <PinnedGroup sessions={pinned} active={active} openSessionKeys={openSessionKeys} callbacks={callbacks} />
+        )}
         {ownerGroups ? ownerGroups.map(g => (
           <OwnerGroup
             key={g.owner} owner={g.owner} isSelf={g.owner === selfUsername}
@@ -621,7 +732,7 @@ function EmptyState({ text }) {
 }
 
 // ── 主组件 ────────────────────────────────────────────────────
-export default function SessionTabs({ token, selfUsername, sessions, activeSessions, foldersByMachine = {}, historySessions, openTerminals, active, onOpen, onClose, onDelete, onStop, onRenameSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder, ws, machineId, machines, onLaunch, onPreviewMd, onSelectMachine }) {
+export default function SessionTabs({ token, selfUsername, sessions, activeSessions, foldersByMachine = {}, historySessions, openTerminals, active, onOpen, onClose, onDelete, onStop, onRenameSession, onPinSession, onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder, ws, machineId, machines, onLaunch, onPreviewMd, onSelectMachine }) {
   const T = useTheme();
   // 默认进「会话」Tab（原“运行中”，已合并“已打开”）
   const [tab, setTab] = useState('running');
@@ -672,7 +783,7 @@ export default function SessionTabs({ token, selfUsername, sessions, activeSessi
       </div>
 
       {sharingSession && <SessionSharing token={token} session={sharingSession} onClose={() => setSharingSession(null)} />}
-      {tab === 'running' && <RunningTab onShare={setSharingSession} activeSessions={activeSessions} foldersByMachine={foldersByMachine} openTerminals={openTerminals} active={active} selfUsername={selfUsername} onOpen={onOpen} onStop={onStop} onClose={onClose} onRenameSession={onRenameSession} onMoveSession={onMoveSession} onCreateFolder={onCreateFolder} onRenameFolder={onRenameFolder} onDeleteFolder={onDeleteFolder} onMoveFolder={onMoveFolder} />}
+      {tab === 'running' && <RunningTab onShare={setSharingSession} activeSessions={activeSessions} foldersByMachine={foldersByMachine} openTerminals={openTerminals} active={active} selfUsername={selfUsername} onOpen={onOpen} onStop={onStop} onClose={onClose} onRenameSession={onRenameSession} onPinSession={onPinSession} onMoveSession={onMoveSession} onCreateFolder={onCreateFolder} onRenameFolder={onRenameFolder} onDeleteFolder={onDeleteFolder} onMoveFolder={onMoveFolder} />}
       {tab === 'history' && <HistoryTab historySessions={historySessions} active={active} onOpen={onOpen} onLaunch={onLaunch} onDelete={onDelete} />}
       {tab === 'files'   && <FileBrowser ws={ws} machineId={machineId} machines={machines} historySessions={historySessions} onLaunch={onLaunch} onPreviewMd={onPreviewMd} onSelectMachine={onSelectMachine} />}
     </div>

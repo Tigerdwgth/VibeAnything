@@ -6,6 +6,7 @@ import {
 } from '../machine-prefs';
 import { getRunningSessionTitle } from '../session-list-utils';
 import { sessionKey, isSameSession, renameOpenTerminals } from '../session-key';
+import { splitPinned } from '../session-pins';
 import useRelay from './useRelay';
 import MobileSessionList from './MobileSessionList';
 import MobileTerminal from './MobileTerminal';
@@ -99,7 +100,7 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
   const {
     ws, wsReady, machines: onlineMachines, activeSessions, stopSession, username,
     foldersByMachine, actionError, clearActionError,
-    renameSession, moveSession, createFolder, renameFolder, deleteFolder, moveFolder,
+    renameSession, pinSession, moveSession, createFolder, renameFolder, deleteFolder, moveFolder,
   } = useRelay(token, {
     onAuthFailed,
     onSessionDenied: closeTab,
@@ -137,9 +138,15 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
     [machines, savedMachine]
   );
 
+  // 置顶的会话单独成组、不跟着机器胶囊切换：切到哪台开发机，置顶组都在列表最上面
+  const { pinned: pinnedSessions, rest: unpinnedSessions } = useMemo(
+    () => splitPinned(activeSessions),
+    [activeSessions]
+  );
+
   const visibleSessions = useMemo(() => (
-    selectedMachine ? activeSessions.filter(s => s.machineId === selectedMachine) : activeSessions
-  ), [activeSessions, selectedMachine]);
+    selectedMachine ? unpinnedSessions.filter(s => s.machineId === selectedMachine) : unpinnedSessions
+  ), [unpinnedSessions, selectedMachine]);
 
   const openSessionKeys = useMemo(
     () => new Set(openTerminals.map(t => sessionKey(t.machineId, t.sessionId))),
@@ -194,6 +201,8 @@ export default function MobileShell({ token, onAuthFailed, isDark, onToggleTheme
     selectedMachine,
     onSelectMachine: chooseMachine,
     sessions: visibleSessions,
+    pinnedSessions,
+    onPinSession: pinSession,
     openSessionKeys,
     activeSessionKey: visibleKey,
     onOpen: openTerminal,

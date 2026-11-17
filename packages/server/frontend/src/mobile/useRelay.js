@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mergeActiveSessions, dropOfflineMachines } from '../session-merge';
 import { isSameSession } from '../session-key';
+import { applyPin } from '../session-pins';
 import { parseWsMessage } from '../ws-message';
 import { loadHideOthers } from '../machine-prefs';
 import { playSound } from '../sound';
@@ -176,6 +177,13 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
     send({ type: 'rename_session', machineId, sessionId, newName: name });
   }, [send]);
 
+  // 置顶 / 取消置顶：记在 relay 上、按登录用户存，所以桌面版置顶的这里也看得到（反过来一样）。
+  // 本地先改，relay 随后把这台机器的列表重推给这个人的所有页面。
+  const pinSession = useCallback((machineId, sessionId, pinned) => {
+    send({ type: 'pin_session', machineId, sessionId, pinned });
+    setActiveSessions(prev => applyPin(prev, machineId, sessionId, pinned));
+  }, [send]);
+
   // ── 文件夹 ──
   // 乐观更新的取舍与桌面版一致：改名/移动这类纯元数据操作立刻反映到本地，
   // 新建/删除等服务端回推全量 folders（id 由服务端生成，本地造不出来）。
@@ -218,6 +226,6 @@ export default function useRelay(token, { onAuthFailed, onSessionDenied, onSessi
   return {
     ws, wsReady, machines, sessions, activeSessions, isAdmin, username, send, stopSession,
     foldersByMachine, actionError, clearActionError,
-    renameSession, moveSession, createFolder, renameFolder, deleteFolder, moveFolder,
+    renameSession, pinSession, moveSession, createFolder, renameFolder, deleteFolder, moveFolder,
   };
 }

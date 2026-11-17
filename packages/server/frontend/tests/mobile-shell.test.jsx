@@ -500,3 +500,78 @@ describe('机器下线', () => {
     expect(buttons().some(b => b.textContent.startsWith('mB'))).toBe(false);
   });
 });
+
+describe('置顶', () => {
+  const TWO_MACHINES = [{ machineId: 'mA', defaultWorkDir: '/w' }, { machineId: 'mB', defaultWorkDir: '/w' }];
+  const pinnedToggle = () => host.querySelector('button[aria-label$="置顶"]');
+  const rowCwds = () => Array.from(host.querySelectorAll('div'))
+    .filter(d => d.style.borderLeft)
+    .map(d => d.textContent.match(/\/[a-z]\d?/)[0]);
+
+  function feedTwo(sessionsA, sessionsB) {
+    act(() => { ws().onopen?.(); });
+    act(() => {
+      ws().emit({ type: 'machine_list', machines: TWO_MACHINES });
+      ws().emit({ type: 'active_sessions', machineId: 'mA', sessions: sessionsA });
+      ws().emit({ type: 'active_sessions', machineId: 'mB', sessions: sessionsB });
+    });
+  }
+
+  test('别的开发机上置顶的会话，不用切机器就在列表最上面；点开连的是它自己的机器', () => {
+    localStorage.setItem('preferredMachine', 'mA');
+    mount();
+    feedTwo(
+      [{ sessionId: 'a1', cwd: '/a' }],
+      [{ sessionId: 'b1', cwd: '/b', pinnedAt: 1000 }, { sessionId: 'b2', cwd: '/c' }],
+    );
+    expect(pinnedToggle()).toBeTruthy();
+    // 选中的是 mA：置顶组里是 mB 的 b1，下面是 mA 自己的 a1；mB 没置顶的 b2 不在
+    expect(rowCwds()).toEqual(['/b', '/a']);
+
+    click(rowByCwd('/b'));
+    const saved = JSON.parse(localStorage.getItem('mobileOpenTerminals'));
+    expect(saved.map(t => `${t.machineId}:${t.sessionId}`)).toEqual(['mB:b1']);
+  });
+
+  test('会话 ⋯ →「置顶」：发 pin_session，这一行立刻进置顶组', () => {
+    localStorage.setItem('preferredMachine', 'mA');
+    mount();
+    feedTwo([{ sessionId: 'a1', cwd: '/a' }, { sessionId: 'a2', cwd: '/d' }], []);
+    expect(pinnedToggle()).toBeNull();
+
+    click(rowByCwd('/d').querySelector('button[aria-label="会话操作"]'));
+    click(buttons().find(b => b.textContent.startsWith('置顶')));
+
+    expect(ws().sent.filter(m => m.type === 'pin_session')).toEqual([
+      { type: 'pin_session', machineId: 'mA', sessionId: 'a2', pinned: true },
+    ]);
+    expect(pinnedToggle()).toBeTruthy();
+    expect(rowCwds()).toEqual(['/d', '/a']);
+  });
+
+  test('「取消置顶」：发 pinned:false，回到所在开发机的列表里', () => {
+    localStorage.setItem('preferredMachine', 'mA');
+    mount();
+    feedTwo([{ sessionId: 'a1', cwd: '/a', pinnedAt: 1000 }], []);
+
+    click(rowByCwd('/a').querySelector('button[aria-label="会话操作"]'));
+    click(buttons().find(b => b.textContent.startsWith('取消置顶')));
+
+    expect(ws().sent.filter(m => m.type === 'pin_session')).toEqual([
+      { type: 'pin_session', machineId: 'mA', sessionId: 'a1', pinned: false },
+    ]);
+    expect(pinnedToggle()).toBeNull();
+    expect(rowCwds()).toEqual(['/a']);
+  });
+
+  test('桌面版那边置顶了（relay 重推带 pinnedAt 的列表）：这里跟着进置顶组', () => {
+    localStorage.setItem('preferredMachine', 'mA');
+    mount();
+    feedTwo([{ sessionId: 'a1', cwd: '/a' }], [{ sessionId: 'b1', cwd: '/b' }]);
+    expect(rowCwds()).toEqual(['/a']);
+    act(() => {
+      ws().emit({ type: 'active_sessions', machineId: 'mB', sessions: [{ sessionId: 'b1', cwd: '/b', pinnedAt: 5000 }] });
+    });
+    expect(rowCwds()).toEqual(['/b', '/a']);
+  });
+});

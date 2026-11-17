@@ -55,8 +55,23 @@ Dashboard「运行中」Tab 支持给会话重命名、并用任意层级嵌套�
 - `folders`：`{ folders:[{id,name,parentId}] }`（含空文件夹）。
 - `rename_error`：`{ sessionId, error }`。
 
+## 置顶（跨开发机的分组）
+
+文件夹是**一台开发机内**的分组；「置顶」是**跨开发机**的：把任意几台机器上的会话聚到列表最上面的一组。
+
+- 存储：不在开发机上，在 relay 的 `users.db`（`session_pins` 表，`username + machine_id + session_id → pinned_at`）。
+  置顶是每个 dashboard 用户自己的，且要在桌面版与手机版之间同步，所以既不能放开发机（所有用户共用一份），
+  也不能放浏览器 localStorage。
+- 下发：relay 按浏览器投影 `active_sessions` 时，给该用户置顶的会话带上 `pinnedAt`（毫秒时间戳），没置顶的不带这个字段。
+- 置顶的会话只在置顶组里显示；它的 `folderId` 原样保留，取消置顶就回到原来的文件夹。
+- 改名（`session_renamed`）时置顶跟到新名字上；停止（`stop_terminal`）/ 删除（`session_deleted`）时清掉。
+
+| type | 字段 | relay 动作 |
+|---|---|---|
+| `pin_session` | machineId, sessionId, pinned(bool) | 记 / 清置顶（须对该会话有访问权），并把这台机器的列表重推给该用户的所有连接 |
+
 ## 相关文件
 
-- 后端：`lib/session-metadata.js`、`lib/pty-manager.js`（`renameTmuxSession`/`sanitizeTmuxName`）、`lib/ws-client.js`、`packages/server/relay.js`
-- 前端：`packages/server/frontend/src/folder-tree.js`、`useFolderCollapse.js`、`ContextMenu.jsx`、`SessionTabs.jsx`、`Dashboard.jsx`
+- 后端：`lib/session-metadata.js`、`lib/pty-manager.js`（`renameTmuxSession`/`sanitizeTmuxName`）、`lib/ws-client.js`、`packages/server/relay.js`、`packages/server/session-pins.js`（置顶）
+- 前端：`packages/server/frontend/src/folder-tree.js`、`useFolderCollapse.js`、`ContextMenu.jsx`、`SessionTabs.jsx`、`Dashboard.jsx`、`session-pins.js` / `useStoredCollapse.js`（置顶）
 - 测试：`tests/session-metadata.test.js`、`tests/pty-manager.test.js`、`packages/server/frontend/tests/folder-tree.test.js`

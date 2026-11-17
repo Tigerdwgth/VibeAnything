@@ -3,6 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { WebSocketServer } = require('ws');
 const { verifyToken } = require('./auth');
 const owners = require('./session-owners');
+const pins = require('./session-pins');
 const machineTokens = require('./machine-tokens');
 
 // 会话对象的 id 字段名不统一：active_sessions 用 sessionId，session_list 用 id。
@@ -38,6 +39,8 @@ const BROWSER_POLICY = {
   rename_session:  { session: m => m.sessionId },
   // 会话是自己的，不代表能往别人的分组里塞
   move_session:    { session: m => m.sessionId, folders: m => [m.folderId] },
+  // 置顶 / 取消置顶：只能置顶自己看得见的会话（否则置顶记录可以用来探测别人的会话名）
+  pin_session:     { session: m => m.sessionId },
   create_folder:   { folders: m => [m.parentId] },
   rename_folder:   { folders: m => [m.folderId] },
   delete_folder:   { folders: m => [m.folderId] },
@@ -343,9 +346,12 @@ class RelayServer {
       const mid = machineId || s.machineId;
       if (!this._canAccess(browser, mid, sid)) continue;
       const owner = owners.getOwner(mid, sid);
+      // 置顶是每个用户自己的：同一个会话，置顶的人收到 pinnedAt，别人收不到这个字段
+      const pinnedAt = pins.pinnedAt(browser.user.username, mid, sid);
       out.push({
         ...s,
         ...(withOwner ? { owner } : {}),
+        ...(pinnedAt ? { pinnedAt } : {}),
         canShare: owners.canManageSharing(browser.user, mid, sid),
         sharedBy: owners.getShares(mid, sid).includes(browser.user.username) && owner !== browser.user.username
           ? (owner || '管理员') : null,
@@ -623,6 +629,26 @@ class RelayServer {
   }
 
   /**
+   * 置顶 / 取消置顶一个会话（浏览器的 pin_session）。
+   *
+   * 置顶记在用户名下，不在连接上：同一个人开着的每个页面（桌面版、手机版、别的标签页）
+   * 都要立刻看到同一份置顶组，所以改完把这台机器的会话列表重推给**这个人的所有连接**。
+   * 列表用的是 relay 手里现成的那份，不必等开发机下一轮扫描；别人的列表没变，不推。
+   */
+  _setPinned(browser, machineId, sessionId, pinned) {
+    const { username } = browser.user;
+    const changed = pinned
+      ? pins.pin(username, machineId, sessionId)
+      : pins.unpin(username, machineId, sessionId);
+    if (!changed) return;
+    const m = this.machines.get(machineId);
+    if (!m) return;
+    for (const b of this.browsers.values()) {
+      if (b.user.username === username) this._sendTo(b, { type: 'active_sessions', machineId, sessions: m.sessions });
+    }
+  }
+
+  /**
    * hook_event（红绿灯 + 提示音）的可见性：事件同时带 claude 侧 sessionId 与 tmuxSession，
    * 归属台账两种 key 都可能登记，任一命中即放行。两个都判不出归属的事件只发给全量视图的
    * admin —— 否则隐藏他人会话后，别人的会话跑完仍会在管理员这边响一声。
@@ -675,6 +701,7 @@ class RelayServer {
     // 新名由开发机给出（tmux 侧真实结果），relay 不自行推算。
     if (msg.type === 'session_renamed') {
       owners.renameSession(machineId, msg.oldSessionId, msg.newSessionId);
+      pins.renameSession(machineId, msg.oldSessionId, msg.newSessionId);
       // 也要下发给浏览器：sessionId 就是 tmux 名，改完之后开着的那个标签还指着旧名，
       // 下次重连时 open_terminal 会照旧名**新建**一个空会话（手机切后台就重连，尤其明显）。
       this._broadcast({ ...msg, machineId });
@@ -682,6 +709,7 @@ class RelayServer {
     }
     if (msg.type === 'session_deleted' && msg.sessionId) {
       owners.removeOwner(machineId, msg.sessionId);
+      pins.removeSession(machineId, msg.sessionId);
     }
     if (msg.type === 'hook_event') this._inferHookSessionOwner(machineId, msg);
     // 目录列表 / 文件内容 / 删除回执：只回给发起请求的浏览器。以前是无差别广播，
@@ -861,6 +889,8 @@ class RelayServer {
       browser.watching.delete(watchKey());
       this._sessionSizes.delete(watchKey());
       this._toMachine(msg.machineId, { type: 'pty_kill', sessionId: msg.sessionId });
+      // 会话没了，所有人对它的置顶一起清掉（见 session-pins.js 的 removeSession）
+      pins.removeSession(msg.machineId, msg.sessionId);
     } else if (msg.type === 'delete_session') {
       if (this._toMachine(msg.machineId, { type: 'delete_session', sessionId: msg.sessionId })) this._expectReply(browserId, msg.machineId, msg);
     } else if (msg.type === 'read_file') {
@@ -879,6 +909,8 @@ class RelayServer {
           name: msg.name, error: 'Machine unavailable',
         });
       }
+    } else if (msg.type === 'pin_session') {
+      this._setPinned(browser, msg.machineId, msg.sessionId, msg.pinned);
     } else if (msg.type === 'create_folder') {
       // folderId 由 relay 生成 —— 归属要在创建的同一刻落台账，
       // 不能等开发机把新文件夹推回来再猜是谁建的（两个人同时建就分不清）。

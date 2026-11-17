@@ -7,6 +7,9 @@ import {
   partitionByOwner, shouldGroupByOwner, sortOwnerKeys, UNOWNED_OWNER_KEY,
 } from '../folder-tree';
 import useFolderCollapse from '../useFolderCollapse';
+import useStoredCollapse from '../useStoredCollapse';
+import { isPinned } from '../session-pins';
+import { shortMachineId } from '../machine-name';
 import { sessionKey } from '../session-key';
 import SessionSharing from '../SessionSharing';
 import { MobileActionSheet, MobilePromptSheet } from './MobileSheet';
@@ -24,6 +27,10 @@ import {
 //  · 手机上这两样都不能照搬：拖拽库的 sensor 会和列表滚动抢同一串 touch 事件
 //    （2026-08-23 的「会话列表滑不动」就是这么来的），右键菜单在触屏上根本不存在。
 //    所以这里一律走「点 ⋯ → 底部面板里选」——不抢手势，目标也比拖一段距离更准。
+//
+// 置顶组（见 ../session-pins.js）排在列表最上面，聚合**所有**开发机上置顶的会话：
+// 它不跟着上面的机器胶囊切换 —— 置顶就是为了不用先想「它在哪台机器上」再去找。
+// 置顶 / 取消置顶同样在会话的 ⋯ 里。
 
 function timeAgo(ts) {
   if (!ts) return '';
@@ -222,7 +229,8 @@ function FolderRow({ node, depth, collapsed, onToggle, onMenu, T }) {
   );
 }
 
-function SessionRow({ session, machineId, depth, isOpen, isActive, onOpen, onCloseTab, onMenu, T }) {
+// machineLabel：置顶组里的行要标出会话在哪台开发机上（组里混着几台机器的会话）
+function SessionRow({ session, machineId, machineLabel, depth, isOpen, isActive, onOpen, onCloseTab, onMenu, T }) {
   return (
     <div
       onClick={() => onOpen(machineId, session.sessionId, getRunningSessionCommand(session), session.cwd)}
@@ -246,10 +254,19 @@ function SessionRow({ session, machineId, depth, isOpen, isActive, onOpen, onClo
           color: T.textPrimary, fontSize: '0.88rem', fontWeight: 500,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{getRunningSessionTitle(session)}{session.sharedBy && <span style={{ color: T.accent, marginLeft: 6, fontSize: '0.7rem' }}>共享</span>}</div>
-        <div style={{
-          color: T.textMuted, fontSize: '0.7rem', fontFamily: T.fontMono,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{getRunningSessionDetail(session)}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+          {machineLabel && (
+            <span title={`开发机 ${machineId}`} style={{
+              color: T.textSecondary, border: `1px solid ${T.border}`, borderRadius: '4px',
+              padding: '0 4px', fontSize: '0.64rem', fontFamily: T.fontSans, flexShrink: 0, whiteSpace: 'nowrap',
+            }}>{machineLabel}</span>
+          )}
+          <div style={{
+            flex: 1, minWidth: 0,
+            color: T.textMuted, fontSize: '0.7rem', fontFamily: T.fontMono,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{getRunningSessionDetail(session)}</div>
+        </div>
       </div>
       <span style={{ color: T.textMuted, fontSize: '0.68rem', flexShrink: 0 }}>{timeAgo(session.mtime)}</span>
       {isOpen && (
@@ -283,6 +300,8 @@ export default function MobileSessionList({
   token, selfUsername,
   machines, selectedMachine, onSelectMachine,
   sessions, openSessionKeys, activeSessionKey,
+  // 置顶的会话（来自所有开发机，已按置顶先后排好）；sessions 里不含它们
+  pinnedSessions = [], onPinSession,
   onOpen, onCloseTab, onStop, onCreate, onRenameSession,
   folders = [],
   onMoveSession, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveFolder,
@@ -293,6 +312,7 @@ export default function MobileSessionList({
   // 一个底部面板一次只开一个：{ kind, ... }
   const [sheet, setSheet] = useState(null);
   const { isCollapsed, toggle } = useFolderCollapse(selectedMachine);
+  const [pinnedCollapsed, setPinnedCollapsed] = useStoredCollapse('pinnedCollapsed');
 
   const machine = useMemo(
     () => machines.find(m => m.machineId === selectedMachine) || null,
@@ -317,14 +337,15 @@ export default function MobileSessionList({
   }, [folders, sessions, selfUsername]);
 
   // 新建会话时的目录快捷选项：这台机器上已有会话的 cwd（最常见的就是接着在同一个项目里开一个）
+  // 这台机器上被置顶的会话不在 sessions 里，一样算进来
   const cwdSuggestions = useMemo(() => {
     const seen = [];
-    for (const s of sessions) {
+    for (const s of [...sessions, ...pinnedSessions.filter(p => p.machineId === selectedMachine)]) {
       const dir = String(s.cwd || '').trim();
       if (dir && !seen.includes(dir)) seen.push(dir);
     }
     return seen.slice(0, 6);
-  }, [sessions]);
+  }, [sessions, pinnedSessions, selectedMachine]);
 
   const close = () => setSheet(null);
 
@@ -334,17 +355,28 @@ export default function MobileSessionList({
   }
 
   function sessionMenuItems(session) {
+    const pinned = isPinned(session);
     const items = [{
+      key: 'pin',
+      label: pinned ? '取消置顶' : '置顶',
+      hint: pinned ? '回到所在开发机的列表里' : '放到列表最上面，换开发机也看得到',
+      onSelect: () => { close(); onPinSession(session.machineId, session.sessionId, !pinned); },
+    }, {
       key: 'rename',
       label: '重命名',
       hint: '改 tmux 名',
       onSelect: () => setSheet({ kind: 'rename-session', session }),
-    }, {
-      key: 'move',
-      label: '移动到文件夹…',
-      hint: folderPaths.find(f => f.id === session.folderId)?.label || '未分组',
-      onSelect: () => setSheet({ kind: 'move-session', session }),
     }];
+    // 置顶组里的会话可能在另一台开发机上，而这里手头只有当前选中那台的文件夹树 ——
+    // 要挪文件夹先取消置顶，回到它自己的机器列表里再挪。
+    if (!pinned) {
+      items.push({
+        key: 'move',
+        label: '移动到文件夹…',
+        hint: folderPaths.find(f => f.id === session.folderId)?.label || '未分组',
+        onSelect: () => setSheet({ kind: 'move-session', session }),
+      });
+    }
     if (session.canShare) {
       items.unshift({ key: 'share', label: '共享窗口…', onSelect: () => setSheet({ kind: 'share', session }) });
     }
@@ -455,12 +487,13 @@ export default function MobileSessionList({
     return rows;
   }
 
-  function renderSession(s, depth) {
+  function renderSession(s, depth, machineLabel) {
     return (
       <SessionRow
         key={`${s.machineId}:${s.sessionId}`}
         session={s}
         machineId={s.machineId}
+        machineLabel={machineLabel}
         depth={depth}
         isOpen={openSessionKeys.has(sessionKey(s.machineId, s.sessionId))}
         isActive={activeSessionKey === sessionKey(s.machineId, s.sessionId)}
@@ -530,6 +563,38 @@ export default function MobileSessionList({
       )}
 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        {pinnedSessions.length > 0 && (
+          <>
+            <button
+              type="button"
+              aria-label={`${pinnedCollapsed ? '展开' : '收起'}置顶`}
+              aria-expanded={!pinnedCollapsed}
+              onClick={() => setPinnedCollapsed(!pinnedCollapsed)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
+                minHeight: '46px', padding: '8px 12px 8px 10px', textAlign: 'left',
+                background: T.bgCard, border: 'none', borderBottom: `1px solid ${T.border}`,
+                color: T.textPrimary, fontSize: '0.85rem', fontWeight: 600, fontFamily: T.fontSans,
+              }}
+            >
+              <span aria-hidden="true" style={{
+                color: T.textMuted, fontSize: '0.7rem', width: '12px', flexShrink: 0,
+                transform: pinnedCollapsed ? 'none' : 'rotate(90deg)', transition: 'transform 0.12s',
+              }}>▶</span>
+              <span aria-hidden="true" style={{ flexShrink: 0, fontSize: '0.9rem' }}>📌</span>
+              <span style={{ flex: 1, minWidth: 0 }}>置顶</span>
+              {/* 折叠时里面有正在跑的会话也要看得见，与文件夹行同一个规矩 */}
+              {pinnedCollapsed && pinnedSessions.some(s => s.isRunning) && (
+                <span style={{
+                  width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0,
+                  ...sessionLightStyle(T, true, 5),
+                }} />
+              )}
+              <span style={{ color: T.textMuted, fontSize: '0.72rem', fontWeight: 400, flexShrink: 0 }}>{pinnedSessions.length}</span>
+            </button>
+            {!pinnedCollapsed && pinnedSessions.map(s => renderSession(s, 1, shortMachineId(s.machineId)))}
+          </>
+        )}
         {ownerSections ? ownerSections.flatMap(sec => [
           <div key={`o:${sec.owner}`} style={{
             display: 'flex', alignItems: 'center', gap: '6px',
@@ -552,7 +617,7 @@ export default function MobileSessionList({
             {rootSessions.map(s => renderSession(s, 0))}
           </>
         )}
-        {sessions.length === 0 && rootFolders.length === 0 && (
+        {sessions.length === 0 && rootFolders.length === 0 && !pinnedSessions.some(s => s.machineId === selectedMachine) && (
           <div style={{ padding: '32px 16px', textAlign: 'center', color: T.textMuted, fontSize: '0.85rem' }}>
             这台开发机上没有运行中的会话，点右上角「＋ 新建」开一个
           </div>

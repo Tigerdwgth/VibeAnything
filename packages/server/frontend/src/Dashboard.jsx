@@ -21,6 +21,7 @@ import { FULL_VIEWPORT_HEIGHT } from './mobile-layout-config';
 import { resolveDefaultMachine, loadPreferredMachine, savePreferredMachine, loadHideOthers, saveHideOthers } from './machine-prefs';
 import { mergeActiveSessions, dropOfflineMachines } from './session-merge';
 import { sessionKey, isSameSession, renameOpenTerminals } from './session-key';
+import { applyPin } from './session-pins';
 import { parseWsMessage } from './ws-message';
 
 // 顶栏胶囊按钮：三处（隐藏他人会话 / 视图切换 / 并列）同款，只有选中态不同
@@ -430,6 +431,11 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
     // 真改 tmux 名 → sessionId 会变，不做乐观改名，等服务器回推刷新
     sendWs({ type: 'rename_session', machineId, sessionId, newName: name });
   }
+  // 置顶 / 取消置顶：记在 relay 上（按用户），本地先改，relay 随后回推这台机器的列表
+  function pinSession(machineId, sessionId, pinned) {
+    sendWs({ type: 'pin_session', machineId, sessionId, pinned });
+    setActiveSessions(prev => applyPin(prev, machineId, sessionId, pinned));
+  }
   function moveSession(machineId, sessionId, folderId) {
     const fid = folderId || null;
     sendWs({ type: 'move_session', machineId, sessionId, folderId: fid });
@@ -763,6 +769,7 @@ export default function Dashboard({ token, onLogout, onAuthFailed, onTokenRenewe
                 onDelete={deleteSession}
                 onStop={stopSession}
                 onRenameSession={renameSession}
+                onPinSession={pinSession}
                 onMoveSession={moveSession}
                 onCreateFolder={createFolder}
                 onRenameFolder={renameFolder}

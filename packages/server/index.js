@@ -4,6 +4,7 @@ const path = require('node:path');
 const { createUser, verifyPassword, generateToken, authMiddleware, listUsers, updatePassword, isAdmin, getProfile, updateProfile } = require('./auth');
 const { validateNickname, validateAvatar } = require('./profile-rules');
 const owners = require('./session-owners');
+const pins = require('./session-pins');
 const machineTokens = require('./machine-tokens');
 const { sessionIdOf, hasMachineToken } = require('./relay');
 const usage = require('./usage-store');
@@ -507,6 +508,8 @@ function startServer(opts = {}) {
     // 那条路不绑 machineId。
     const machineCount = await machineTokens.init();
     console.log(`[relay] 开发机台账已载入 ${machineCount} 台`);
+    // 置顶记录也要先载入：晚于握手的话，重连上来的浏览器第一份列表里置顶组是空的
+    console.log(`[relay] 会话置顶已载入 ${await pins.init()} 条`);
     relay.attachToHttpServer(server);
     const scheme = useHttps ? 'https' : 'http';
     server.listen(port, host, () => console.log(`Server running on ${scheme}://${host}:${port}`));
